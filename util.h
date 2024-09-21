@@ -763,8 +763,8 @@ static string BinaryToAsmText(const void *pShaderBytecode, size_t BytecodeLength
 		int hexdump = 0, bool d3dcompiler_46_compat = true)
 {
 	string comments;
-	vector<byte> byteCode(BytecodeLength);
-	vector<byte> disassembly;
+	vector<BYTE> byteCode(BytecodeLength);
+	vector<BYTE> disassembly;
 	HRESULT r;
 
 	comments = "//   using 3Dmigoto v" + string(VER_FILE_VERSION_STR) + " on " + LogTime() + "//\n";

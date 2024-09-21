@@ -2,8 +2,10 @@
 
 NvAPI_Status CheckStereo();
 void FlagConfigReload(HackerDevice *device, void *private_data);
+void FlagConfigSave(HackerDevice* device, void* private_data);
 void LoadConfigFile();
 void ReloadConfig(HackerDevice *device);
+void SaveConfig(HackerDevice* device);
 void LoadProfileManagerConfig(const wchar_t *config_dir);
 void SavePersistentSettings();
 

@@ -58,7 +58,7 @@ void Override::ParseIniSection(LPCWSTR section)
 			}
 		} else if (entry->first.c_str()[0] == L'$') {
 			if (!parse_command_list_var_name(entry->first.c_str(), &entry->ini_namespace, &var)) {
-				LogOverlay(LOG_WARNING, "WARNING: Undeclared variable %S\n", entry->first.c_str());
+				LogOverlay(LOG_WARNING, "WARNING: Undeclared variable %S\n - %S\n", entry->first.c_str(), entry->ini_namespace.c_str());
 				continue;
 			}
 
@@ -275,7 +275,7 @@ void KeyOverrideCycle::ParseIniSection(LPCWSTR section)
 			GetIniString(section, entry->first.c_str(), 0, &param_bufs[OverrideParam(param_idx, param_component)].buf);
 		} else if (entry->first.c_str()[0] == L'$') {
 			if (!parse_command_list_var_name(entry->first.c_str(), &entry->ini_namespace, &var)) {
-				LogOverlay(LOG_WARNING, "WARNING: Undeclared variable %S\n", entry->first.c_str());
+				LogOverlay(LOG_WARNING, "WARNING: Undeclared variable %S\n- %S\n", entry->first.c_str(), entry->ini_namespace.c_str());
 				continue;
 			}
 

@@ -697,7 +697,7 @@ static bool RegenerateShader(wchar_t *shaderFixPath, wchar_t *fileName, const ch
 		LogInfo("    assembling replacement ASM code with shader model %s\n", shaderModel);
 
 		// We need original byte code unchanged, so make a copy.
-		vector<byte> byteCode(origByteCode->GetBufferSize());
+		vector<BYTE> byteCode(origByteCode->GetBufferSize());
 		memcpy(byteCode.data(), origByteCode->GetBufferPointer(), origByteCode->GetBufferSize());
 
 		try
@@ -1994,6 +1994,7 @@ void ParseHuntingSection()
 	// performance hit with hunting on, or where a broken effect is
 	// discovered while playing normally where it may not be easy/fast to
 	// find the effect again later.
+	G->config_reloadable = RegisterIniKeyBinding(L"Hunting", L"save_config", FlagConfigSave, NULL, noRepeat, NULL);
 	G->config_reloadable = RegisterIniKeyBinding(L"Hunting", L"reload_config", FlagConfigReload, NULL, noRepeat, NULL);
 	G->config_reloadable = RegisterIniKeyBinding(L"Hunting", L"wipe_user_config", FlagConfigReload, NULL, noRepeat, (void*)true);
 

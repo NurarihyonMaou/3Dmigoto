@@ -284,12 +284,12 @@ void optimise_command_lists(HackerDevice *device)
 		// Go through each registered command list and remove any
 		// commands that are noops to eliminate the runtime overhead of
 		// processing these
-		for (CommandList *command_list : registered_command_lists) {
+		for (CommandList* command_list : registered_command_lists) {
 			for (i = 0; i < command_list->commands.size(); ) {
 				if (command_list->commands[i]->noop(command_list->post, ignore_cto_pre, ignore_cto_post)) {
 					LogInfo("Optimised out %s %S\n",
-							command_list->post ? "post" : "pre",
-							command_list->commands[i]->ini_line.c_str());
+						command_list->post ? "post" : "pre",
+						command_list->commands[i]->ini_line.c_str());
 					command_list->commands.erase(command_list->commands.begin() + i);
 					making_progress = true;
 					continue;
@@ -5732,7 +5732,8 @@ bool IfCommand::noop(bool post, bool ignore_cto_pre, bool ignore_cto_post)
 		if (static_val) {
 			false_commands_pre->clear();
 			false_commands_post->clear();
-		} else {
+		}
+		else {
 			true_commands_pre->clear();
 			true_commands_post->clear();
 		}
