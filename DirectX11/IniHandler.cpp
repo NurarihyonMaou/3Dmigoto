@@ -61,6 +61,7 @@ static Section CommandListSections[] = {
 // list a section in both lists - put it above if it is a command list section,
 // and in this list if it is not:
 static Section RegularSections[] = {
+	{L"Pool", true},
 	{L"Resource", true},
 	{L"Key", true},
 	{L"Include", true}, // Prefix so that it may be namespaced to allow included files to include more files with relative paths
@@ -1826,94 +1827,152 @@ static void ParseResourceInitialData(CustomResource *custom_resource, const wcha
 	}
 }
 
+static CustomResource* ParseResourceSection(const wchar_t* section_name, const wchar_t* resource_id_suffix)
+{
+	wchar_t setting[MAX_PATH];
+
+	wstring resource_id(section_name);
+	if (resource_id_suffix != nullptr) {
+		resource_id += L"_";
+		resource_id += resource_id_suffix;
+	}
+
+	// Convert section name to lower case so our keys will be consistent in the unordered_map:
+	std::transform(resource_id.begin(), resource_id.end(), resource_id.begin(), ::towlower);
+
+	// Empty Resource sections are valid (think of them as a
+	// sort of variable declaration), so explicitly construct a
+	// CustomResource for each one. Use the [] operator so the
+	// default constructor will be used:
+	CustomResource* custom_resource = &customResources[resource_id];
+	custom_resource->name = resource_id;
+	custom_resource->pool_index = -2;
+
+	custom_resource->max_copies_per_frame = GetIniInt(section_name, L"max_copies_per_frame", 0, NULL);
+
+	if (GetIniStringAndLog(section_name, L"filename", 0, setting, MAX_PATH)) {
+		// If this section was not in the main d3dx.ini, look
+		// for a file relative to the config it came from
+		// first, then try relative to the 3DMigoto directory:
+		wstring namespace_path;
+		get_namespaced_section_path(section_name, &namespace_path);
+		bool found = false;
+		wchar_t path[MAX_PATH];
+		if (!namespace_path.empty()) {
+			GetModuleFileName(migoto_handle, path, MAX_PATH);
+			wcsrchr(path, L'\\')[1] = 0;
+			wcscat(path, namespace_path.c_str());
+			wcscat(path, setting);
+			if (GetFileAttributes(path) != INVALID_FILE_ATTRIBUTES)
+				found = true;
+		}
+		if (!found) {
+			GetModuleFileName(migoto_handle, path, MAX_PATH);
+			wcsrchr(path, L'\\')[1] = 0;
+			wcscat(path, setting);
+		}
+		custom_resource->filename = path;
+	}
+
+	custom_resource->override_type = GetIniEnumClass(section_name, L"type", CustomResourceType::INVALID, NULL, CustomResourceTypeNames);
+
+	if (GetIniString(section_name, L"format", 0, setting, MAX_PATH)) {
+		custom_resource->override_format = ParseFormatString(setting, true);
+		if (custom_resource->override_format == (DXGI_FORMAT)-1) {
+			IniWarningW(L"Unknown format \"%ls\"\n - [%ls]\n", setting, section_name);
+		} else {
+			LogInfo("  format=%s\n", TexFormatStr(custom_resource->override_format));
+		}
+	}
+
+	custom_resource->override_width = GetIniInt(section_name, L"width", -1, NULL);
+	custom_resource->override_height = GetIniInt(section_name, L"height", -1, NULL);
+	custom_resource->override_depth = GetIniInt(section_name, L"depth", -1, NULL);
+	custom_resource->override_mips = GetIniInt(section_name, L"mips", -1, NULL);
+	custom_resource->override_array = GetIniInt(section_name, L"array", -1, NULL);
+	custom_resource->override_msaa = GetIniInt(section_name, L"msaa", -1, NULL);
+	custom_resource->override_msaa_quality = GetIniInt(section_name, L"msaa_quality", -1, NULL);
+	custom_resource->override_byte_width = GetIniInt(section_name, L"byte_width", -1, NULL);
+	custom_resource->override_stride = GetIniInt(section_name, L"stride", -1, NULL);
+
+	custom_resource->width_multiply = GetIniFloat(section_name, L"width_multiply", 1.0f, NULL);
+	custom_resource->height_multiply = GetIniFloat(section_name, L"height_multiply", 1.0f, NULL);
+
+	if (GetIniStringAndLog(section_name, L"bind_flags", 0, setting, MAX_PATH)) {
+		custom_resource->override_bind_flags = parse_enum_option_string<const wchar_t*, CustomResourceBindFlags, wchar_t*>
+			(CustomResourceBindFlagNames, setting, NULL);
+	}
+
+	if (GetIniStringAndLog(section_name, L"misc_flags", 0, setting, MAX_PATH)) {
+		custom_resource->override_misc_flags = parse_enum_option_string<const wchar_t*, ResourceMiscFlags, wchar_t*>
+			(ResourceMiscFlagNames, setting, NULL);
+	}
+
+	ParseResourceInitialData(custom_resource, section_name);
+
+	return custom_resource;
+}
+
+static CustomResourcePool* ParseResourcePoolSection(const wchar_t* section_name)
+{
+	int pool_size = GetIniInt(section_name, L"pool_size", 0, NULL);
+
+	if (pool_size <= 0) {
+		return nullptr;
+	}
+
+	wstring pool_id = section_name;
+	std::transform(pool_id.begin(), pool_id.end(), pool_id.begin(), ::towlower);
+
+	CustomResourcePool* custom_resource_pool = &customResourcePools[pool_id];
+	
+	custom_resource_pool->name = pool_id;
+	custom_resource_pool->resource_template = ParseResourceSection(section_name, L"template");
+	custom_resource_pool->resource_template->pool_index = -1;
+
+	custom_resource_pool->resources.resize(pool_size, nullptr);
+	custom_resource_pool->lazy_initialization = GetIniBool(section_name, L"pool_lazy_init", 1, NULL);
+	custom_resource_pool->index_type = GetIniEnumClass(section_name, L"pool_index_type", PoolIndexType::RING, NULL, PoolIndexTypeNames);
+
+	if (custom_resource_pool->index_type == PoolIndexType::FIFO) {
+		custom_resource_pool->fifo_index_table.resize(pool_size, FLT_MAX);
+		custom_resource_pool->last_fifo_index = pool_size - 1;
+	}
+
+	if (!custom_resource_pool->lazy_initialization) {
+		for (int pool_index = 0; pool_index < pool_size; ++pool_index) {
+			custom_resource_pool->InitializeResource(pool_index);
+		}
+	}
+
+	return custom_resource_pool;
+}
+
 static void ParseResourceSections()
 {
-	IniSections::iterator lower, upper, i;
-	wstring resource_id;
-	CustomResource *custom_resource;
-	wchar_t setting[MAX_PATH], path[MAX_PATH];
-	wstring namespace_path;
-	bool found;
-
+	customResourcePools.clear();
 	customResources.clear();
+
+	IniSections::iterator lower = ini_sections.lower_bound(wstring(L"Pool"));
+	IniSections::iterator upper = prefix_upper_bound(ini_sections, wstring(L"Pool"));
+
+	for (IniSections::iterator i = lower; i != upper; i++) {
+		wstring section_name = i->first;
+
+		LogInfoW(L"[%s]\n", section_name.c_str());
+
+		ParseResourcePoolSection(section_name.c_str());
+	}
 
 	lower = ini_sections.lower_bound(wstring(L"Resource"));
 	upper = prefix_upper_bound(ini_sections, wstring(L"Resource"));
-	for (i = lower; i != upper; i++) {
-		LogInfoW(L"[%s]\n", i->first.c_str());
 
-		// Convert section name to lower case so our keys will be
-		// consistent in the unordered_map:
-		resource_id = i->first;
-		std::transform(resource_id.begin(), resource_id.end(), resource_id.begin(), ::towlower);
+	for (IniSections::iterator i = lower; i != upper; i++) {
+		wstring section_name = i->first;
 
-		// Empty Resource sections are valid (think of them as a
-		// sort of variable declaration), so explicitly construct a
-		// CustomResource for each one. Use the [] operator so the
-		// default constructor will be used:
-		custom_resource = &customResources[resource_id];
-		custom_resource->name = i->first;
+		LogInfoW(L"[%s]\n", section_name.c_str());
 
-		custom_resource->max_copies_per_frame =
-			GetIniInt(i->first.c_str(), L"max_copies_per_frame", 0, NULL);
-
-		if (GetIniStringAndLog(i->first.c_str(), L"filename", 0, setting, MAX_PATH)) {
-			// If this section was not in the main d3dx.ini, look
-			// for a file relative to the config it came from
-			// first, then try relative to the 3DMigoto directory:
-			get_namespaced_section_path(i->first.c_str(), &namespace_path);
-			found = false;
-			if (!namespace_path.empty()) {
-				GetModuleFileName(migoto_handle, path, MAX_PATH);
-				wcsrchr(path, L'\\')[1] = 0;
-				wcscat(path, namespace_path.c_str());
-				wcscat(path, setting);
-				if (GetFileAttributes(path) != INVALID_FILE_ATTRIBUTES)
-					found = true;
-			}
-			if (!found) {
-				GetModuleFileName(migoto_handle, path, MAX_PATH);
-				wcsrchr(path, L'\\')[1] = 0;
-				wcscat(path, setting);
-			}
-			custom_resource->filename = path;
-		}
-
-		custom_resource->override_type = GetIniEnumClass(i->first.c_str(), L"type", CustomResourceType::INVALID, NULL, CustomResourceTypeNames);
-
-		if (GetIniString(i->first.c_str(), L"format", 0, setting, MAX_PATH)) {
-			custom_resource->override_format = ParseFormatString(setting, true);
-			if (custom_resource->override_format == (DXGI_FORMAT)-1) {
-				IniWarningW(L"Unknown format \"%ls\"\n - [%ls]\n", setting, i->first.c_str());
-			} else {
-				LogInfo("  format=%s\n", TexFormatStr(custom_resource->override_format));
-			}
-		}
-
-		custom_resource->override_width = GetIniInt(i->first.c_str(), L"width", -1, NULL);
-		custom_resource->override_height = GetIniInt(i->first.c_str(), L"height", -1, NULL);
-		custom_resource->override_depth = GetIniInt(i->first.c_str(), L"depth", -1, NULL);
-		custom_resource->override_mips = GetIniInt(i->first.c_str(), L"mips", -1, NULL);
-		custom_resource->override_array = GetIniInt(i->first.c_str(), L"array", -1, NULL);
-		custom_resource->override_msaa = GetIniInt(i->first.c_str(), L"msaa", -1, NULL);
-		custom_resource->override_msaa_quality = GetIniInt(i->first.c_str(), L"msaa_quality", -1, NULL);
-		custom_resource->override_byte_width = GetIniInt(i->first.c_str(), L"byte_width", -1, NULL);
-		custom_resource->override_stride = GetIniInt(i->first.c_str(), L"stride", -1, NULL);
-
-		custom_resource->width_multiply = GetIniFloat(i->first.c_str(), L"width_multiply", 1.0f, NULL);
-		custom_resource->height_multiply = GetIniFloat(i->first.c_str(), L"height_multiply", 1.0f, NULL);
-
-		if (GetIniStringAndLog(i->first.c_str(), L"bind_flags", 0, setting, MAX_PATH)) {
-			custom_resource->override_bind_flags = parse_enum_option_string<const wchar_t *, CustomResourceBindFlags, wchar_t*>
-				(CustomResourceBindFlagNames, setting, NULL);
-		}
-
-		if (GetIniStringAndLog(i->first.c_str(), L"misc_flags", 0, setting, MAX_PATH)) {
-			custom_resource->override_misc_flags = parse_enum_option_string<const wchar_t *, ResourceMiscFlags, wchar_t*>
-				(ResourceMiscFlagNames, setting, NULL);
-		}
-
-		ParseResourceInitialData(custom_resource, i->first.c_str());
+		ParseResourceSection(section_name.c_str(), nullptr);
 	}
 }
 

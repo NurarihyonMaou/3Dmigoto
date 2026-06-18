@@ -20,6 +20,7 @@
 #include <D3DCompiler.h>
 
 CustomResources customResources;
+CustomResourcePools customResourcePools;
 CustomShaders customShaders;
 ExplicitCommandListSections explicitCommandListSections;
 CommandListVariables command_list_globals;
@@ -420,7 +421,7 @@ static bool ParseCheckTextureOverride(const wchar_t *section,
 	CheckTextureOverrideCommand *operation = new CheckTextureOverrideCommand();
 
 	// Parse value as consistent with texture filtering and resource copying
-	ret = operation->target.ParseTarget(val->c_str(), true, ini_namespace);
+	ret = operation->target.ParseTarget(val->c_str(), true, ini_namespace, pre_command_list->scope);
 	if (ret) {
 		// If the user indicated an explicit command list we will run the pre
 		// and post lists of the target list together.
@@ -504,7 +505,7 @@ static bool ParseClearView(const wchar_t *section,
 
 	while (getline(token_stream, token, L' ')) {
 		if (operation->target.type == ResourceCopyTargetType::INVALID) {
-			ret = operation->target.ParseTarget(token.c_str(), true, ini_namespace);
+			ret = operation->target.ParseTarget(token.c_str(), true, ini_namespace, pre_command_list->scope);
 			if (ret)
 				continue;
 		}
@@ -728,7 +729,7 @@ static bool ParseDrawCommandArgs(wstring *val, DrawCommand *operation, bool indi
 			return false;
 
 		sub = val->substr(start, end);
-		if (!operation->indirect_buffer.ParseTarget(sub.c_str(), true, ini_namespace))
+		if (!operation->indirect_buffer.ParseTarget(sub.c_str(), true, ini_namespace, scope))
 			return false;
 
 		if (operation->indirect_buffer.type == ResourceCopyTargetType::CUSTOM_RESOURCE) {
@@ -844,7 +845,7 @@ static bool ParseFrameAnalysisDump(const wchar_t *section,
 	if (!target)
 		goto bail;
 
-	if (!operation->target.ParseTarget(target, true, ini_namespace))
+	if (!operation->target.ParseTarget(target, true, ini_namespace, pre_command_list->scope))
 		goto bail;
 
 	operation->target_name = L"[" + wstring(section) + L"]-" + wstring(target);
@@ -905,7 +906,7 @@ bool ParseStoreCommand(const wchar_t* section,
 			if (!src_ptr)
 				goto bail;
 
-			if (!operation->src.ParseTarget(src_ptr, true, ini_namespace))
+			if (!operation->src.ParseTarget(src_ptr, true, ini_namespace, pre_command_list->scope))
 				goto bail;
 
 		}
@@ -2454,6 +2455,29 @@ float CommandListOperand::process_texture_filter(CommandListState *state)
 		case ResourceCopyTargetEvaluationMode::RESOURCE_IDENTITY:
 			return texture_filter_target.GetResourceId(state);
 
+		case ResourceCopyTargetEvaluationMode::POOL_INDEX:
+		{
+			CustomResource* custom_resource = texture_filter_target.GetCustomResource();
+			if (custom_resource != nullptr)
+				// Return X for ResourceCopyTarget with custom resource from pool
+				//   * X in range [0, texture_filter_target.custom_resource_pool->resources.size() - 1]
+				// Return -1 for ResourceCopyTarget with pool template resource
+				// Return -2 for ResourceCopyTarget with regular custom resource
+				return (float)custom_resource->pool_index;
+			else
+				// Return -3 for ResourceCopyTarget with non-custom resource
+				return -3.0f;
+		}
+
+		case ResourceCopyTargetEvaluationMode::POOL_IDENTITY:
+			return texture_filter_target.GetPoolId();
+
+		case ResourceCopyTargetEvaluationMode::POOL_SIZE:
+			if (texture_filter_target.custom_resource_pool != nullptr)
+				return (float)texture_filter_target.custom_resource_pool->resources.size();
+			else
+				return -1.0f;
+
 		default:
 			return 0.0f;
 	}
@@ -3181,10 +3205,10 @@ next_token:
 		//   doesn't work if custom resources are checked. If we need
 		//   to match these for some other reason, we could add \ and .
 		//   to this list, which will cover most namespaced resources.
-		pos = remain.find_first_not_of(L"@abcdefghijklmnopqrstuvwxyz_-0123456789");
+		pos = remain.find_first_not_of(L"@#abcdefghijklmnopqrstuvwxyz_-0123456789[$.]");
 		if (pos) {
 			token = remain.substr(0, pos);
-			ret = texture_filter_target.ParseTarget(token.c_str(), true, ini_namespace);
+			ret = texture_filter_target.ParseTarget(token.c_str(), true, ini_namespace, scope);
 			if (ret) {
 				operand = make_shared<CommandListOperand>(friendly_pos, token);
 				if (operand->parse(&token, ini_namespace, scope)) {
@@ -3972,7 +3996,7 @@ bool CommandListOperand::parse(const wstring *operand, const wstring *ini_namesp
 	}
 
 	// Try parsing value as a resource target for texture filtering
-	ret = texture_filter_target.ParseTarget(operand->c_str(), true, ini_namespace);
+	ret = texture_filter_target.ParseTarget(operand->c_str(), true, ini_namespace, scope);
 	if (ret) {
 		type = ParamOverrideType::TEXTURE;
 		return operand_allowed_in_context(type, scope);
@@ -4205,6 +4229,7 @@ CustomResource::CustomResource() :
 	max_copies_per_frame(0),
 	frame_no(0),
 	copies_this_frame(0),
+	pool_index(-2),
 	override_type(CustomResourceType::INVALID),
 	override_bind_flags(CustomResourceBindFlags::INVALID),
 	override_misc_flags(ResourceMiscFlags::INVALID),
@@ -4230,7 +4255,8 @@ CustomResource::~CustomResource()
 		resource->Release();
 	if (view)
 		view->Release();
-	free(initial_data);
+	if (pool_index < 0)
+		free(initial_data);
 }
 
 void CustomResource::Substantiate(ID3D11Device *mOrigDevice1,
@@ -4671,6 +4697,115 @@ static int is_dsv_format(DXGI_FORMAT fmt)
 	}
 }
 
+CustomResource* CustomResourcePool::InitializeResource(int pool_index)
+{
+	wstring resource_id = wstring(name) + L"_" + std::to_wstring(pool_index);
+
+	CustomResource* custom_resource = &customResources[resource_id];
+	custom_resource->name = resource_id;
+	custom_resource->pool_index = pool_index;
+
+	custom_resource->max_copies_per_frame = resource_template->max_copies_per_frame;
+
+	custom_resource->filename = resource_template->filename;
+
+	custom_resource->override_type = resource_template->override_type;
+	custom_resource->override_format = resource_template->override_format;
+	custom_resource->override_byte_width = resource_template->override_byte_width;
+	custom_resource->override_stride = resource_template->override_stride;
+	custom_resource->override_array = resource_template->override_array;
+
+	custom_resource->override_width = resource_template->override_width;
+	custom_resource->override_height = resource_template->override_height;
+	custom_resource->override_depth = resource_template->override_depth;
+	custom_resource->override_mips = resource_template->override_mips;
+	custom_resource->override_msaa = resource_template->override_msaa;
+	custom_resource->override_msaa_quality = resource_template->override_msaa_quality;
+
+	custom_resource->width_multiply = resource_template->width_multiply;
+	custom_resource->height_multiply = resource_template->height_multiply;
+
+	custom_resource->override_bind_flags = resource_template->override_bind_flags;
+	custom_resource->override_misc_flags = resource_template->override_misc_flags;
+
+	if (resource_template->initial_data != nullptr) {
+		custom_resource->initial_data = resource_template->initial_data;
+		custom_resource->initial_data_size = resource_template->initial_data_size;
+	}
+
+	resources[pool_index] = custom_resource;
+
+	return custom_resource;
+}
+
+CustomResource* CustomResourcePool::GetResource(float id) {
+	if (resources.empty())
+		return nullptr;
+
+	size_t pool_index;
+
+	switch (index_type) {
+	case PoolIndexType::RING:
+	{
+		// Allows to continuously loop through a pool
+		// For pool [ResourceA, ResourceB, ResourceC]
+		//   ResourcePoolFoo[-1] returns ResourceC pool_index (2)
+		//   ResourcePoolFoo[3] returns ResourceA pool_index (0)
+		pool_index = ((int)id % resources.size() + resources.size()) % resources.size();
+		break;
+	}
+	case PoolIndexType::FIFO:
+	{
+		// UID-based rolling FIFO indexing:
+		// New UIDs are assigned the next pool slot.
+		// Existing UIDs keep their assigned slot.
+		// When the pool is full, the oldest slot assignment is overwritten.
+		// 
+		// For pool_size of 2 [ResourcePoolFoo_0, ResourcePoolFoo_1]:
+		//   ResourcePoolFoo[11] -> ResourcePoolFoo_0 (pool_index 0)
+		//   ResourcePoolFoo[22] -> ResourcePoolFoo_1 (pool_index 1)
+		//	 ResourcePoolFoo[33] -> ResourcePoolFoo_0 (pool_index 0, evicts UID 11)
+		//   ResourcePoolFoo[22] -> ResourcePoolFoo_1 (pool_index 1, existing assignment)
+		//   ResourcePoolFoo[44] -> ResourcePoolFoo_1 (pool_index 1, evicts UID 22)
+		auto it = fifo_index_map.find(id);
+
+		if (it != fifo_index_map.end())
+		{
+			// Return existing UID -> slot mapping
+			pool_index = it->second;
+		}
+		else
+		{
+			// Allocate next FIFO slot
+			pool_index = (last_fifo_index + 1) % resources.size();
+
+			float previous_uid = fifo_index_table[pool_index];
+
+			// Remove previous UID mapping if slot occupied
+			if (previous_uid != FLT_MAX)
+				fifo_index_map.erase(previous_uid);
+
+			// Install new mapping
+			fifo_index_table[pool_index] = id;
+			fifo_index_map[id] = pool_index;
+
+			last_fifo_index = pool_index;
+		}
+		break;
+	}
+	default:
+		// Should never happen, but just in case lets guarantee existing resource
+		return resource_template;
+	}
+
+	CustomResource* resource = resources[pool_index];
+
+	if (resource == nullptr && lazy_initialization) {
+		resource = InitializeResource(pool_index);
+	}
+
+	return resource;
+}
 
 // Transfer a resource from one device to another. First came across this
 // possibility in DOAXVV where showing the news creates a new temporary device
@@ -5006,7 +5141,7 @@ void CustomResource::expire(ID3D11Device *mOrigDevice1, ID3D11DeviceContext *mOr
 }
 
 bool ResourceCopyTarget::ParseTarget(const wchar_t *target,
-		bool is_source, const wstring *ini_namespace)
+		bool is_source, const wstring *ini_namespace, CommandListScope* scope)
 {
 	int ret, len;
 	size_t length = wcslen(target);
@@ -5016,7 +5151,12 @@ bool ResourceCopyTarget::ParseTarget(const wchar_t *target,
 		target++;
 		length--;
 	}
-
+	else if (target[0] == L'#') {
+		evaluation_mode = ResourceCopyTargetEvaluationMode::POOL_INDEX;
+		target++;
+		length--;
+	}
+	
 	ret = swscanf_s(target, L"%lcs-cb%u%n", &shader_type, 1, &slot, &len);
 	if (ret == 2 && len == length && slot < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT) {
 		type = ResourceCopyTargetType::CONSTANT_BUFFER;
@@ -5081,6 +5221,11 @@ bool ResourceCopyTarget::ParseTarget(const wchar_t *target,
 	}
 
 	if (length >= 9 && !wcsncmp(target, L"resource", 8)) {
+		// Exit early for non-resource type evaluation modes (essentially on invalid syntax)
+		if (evaluation_mode != ResourceCopyTargetEvaluationMode::RESOURCE &&
+			evaluation_mode != ResourceCopyTargetEvaluationMode::RESOURCE_IDENTITY)
+			return false;
+
 		// section name should already have been transformed to lower
 		// case from ParseCommandList, so our keys will be consistent
 		// in the unordered_map:
@@ -5098,6 +5243,96 @@ bool ResourceCopyTarget::ParseTarget(const wchar_t *target,
 		_custom_resource = &res->second;
 		type = ResourceCopyTargetType::CUSTOM_RESOURCE;
 		return true;
+	}
+
+	if (length >= 5 && !wcsncmp(target, L"pool", 4)) {
+		wstring pool_id;
+		wstring pool_index_var_name;
+
+		if (target[length - 1] == L']')
+		{
+			// Parse PoolName[$id] or PoolName[0]
+			const wchar_t* pool_index_open_pos = wcsrchr(target, L'[');
+			if (pool_index_open_pos && pool_index_open_pos > target) {
+				pool_index_var_name = wstring(pool_index_open_pos + 1, target + length - 1);
+				length = pool_index_open_pos - target;
+				pool_id = wstring(target, target + length);
+			}
+			else {
+				// Invalid syntax (opening `[` not found or located after closing `]`)
+				return false;
+			}
+		} 
+		else if (evaluation_mode == ResourceCopyTargetEvaluationMode::RESOURCE_IDENTITY)
+		{
+			// Treat ^PoolName as POOL_IDENTITY instead of RESOURCE_IDENTITY (no index provided)
+			evaluation_mode = ResourceCopyTargetEvaluationMode::POOL_IDENTITY;
+			pool_id = wstring(target);
+		}
+		else if (evaluation_mode == ResourceCopyTargetEvaluationMode::POOL_INDEX)
+		{
+			// Treat #PoolName as POOL_SIZE instead of POOL_INDEX (no index provided)
+			evaluation_mode = ResourceCopyTargetEvaluationMode::POOL_SIZE;
+			pool_id = wstring(target);
+		}
+
+		if (!pool_id.empty())
+		{
+			wstring namespaced_section;
+			CustomResourcePools::iterator con = customResourcePools.end();
+			if (get_namespaced_section_name_lower(&pool_id, ini_namespace, &namespaced_section))
+				con = customResourcePools.find(namespaced_section);
+			if (con == customResourcePools.end())
+				con = customResourcePools.find(pool_id);
+			if (con != customResourcePools.end())
+				custom_resource_pool = &con->second;
+		}
+
+		if (custom_resource_pool == nullptr)
+			return false;
+
+		// Handle resource pool index
+		if (!pool_index_var_name.empty()) {
+			if (pool_index_var_name[0] == L'$')
+			{
+				// Parse DYNAMIC pool index PoolName[$id]
+				CommandListVariable* var = NULL;
+				// Try parsing var_name as a variable:
+				if (find_local_variable(pool_index_var_name, scope, &var) ||
+					parse_command_list_var_name(pool_index_var_name, ini_namespace, &var)) {
+					// Bind custom resource pool
+					// Custom resource will be resolved dynamically in ResourceCopyTarget::GetResource
+					custom_resource_pool_index_var = var;
+				}
+				else {
+					return false;
+				}
+			}
+			else
+			{
+				// Parse STATIC pool index or PoolName[0] 
+				int ret, len1;
+				float val;
+				// Try parsing var_name as a float
+				ret = swscanf_s(pool_index_var_name.c_str(), L"%f%n", &val, &len1);
+				if (ret != 0 && ret != EOF && len1 == pool_index_var_name.length()) {
+					// Bind custom resource instance directly
+					_custom_resource = custom_resource_pool->GetResource(val);
+				}
+				else {
+					return false;
+				}
+			}
+
+			type = ResourceCopyTargetType::CUSTOM_RESOURCE;
+		} 
+		else 
+		{
+			type = ResourceCopyTargetType::CUSTOM_RESOURCE_POOL;
+		}
+		
+		return true;
+
 	}
 
 	// Alternate means to assign IniParams
@@ -5174,9 +5409,11 @@ bool ParseCommandListResourceCopyDirective(const wchar_t *section,
 	ResourceCopyOperation *operation = new ResourceCopyOperation();
 	wchar_t buf[MAX_PATH];
 	wchar_t *src_ptr = NULL;
-	D3D11_RESOURCE_MISC_FLAG misc_flags = (D3D11_RESOURCE_MISC_FLAG)0;
 
-	if (!operation->dst.ParseTarget(key, false, ini_namespace))
+	if (!operation->dst.ParseTarget(key, false, ini_namespace, command_list->scope))
+		goto bail;
+
+	if (operation->dst.type == ResourceCopyTargetType::CUSTOM_RESOURCE_POOL)
 		goto bail;
 
 	// parse_enum_option_string replaces spaces with NULLs, so it can't
@@ -5193,7 +5430,10 @@ bool ParseCommandListResourceCopyDirective(const wchar_t *section,
 	if (!src_ptr)
 		goto bail;
 
-	if (!operation->src.ParseTarget(src_ptr, true, ini_namespace))
+	if (!operation->src.ParseTarget(src_ptr, true, ini_namespace, command_list->scope))
+		goto bail;
+
+	if (operation->src.type == ResourceCopyTargetType::CUSTOM_RESOURCE_POOL)
 		goto bail;
 
 	if (!(operation->options & ResourceCopyOptions::COPY_TYPE_MASK)) {
@@ -5525,7 +5765,25 @@ bool CommandPlaceholder::noop(bool post, bool ignore_cto_pre, bool ignore_cto_po
 
 CustomResource* ResourceCopyTarget::GetCustomResource(bool static_evaluation)
 {
-	return _custom_resource;
+	if (custom_resource_pool == nullptr) {
+		// Default hot path for non-pool resource
+		return _custom_resource;
+	} else {
+		if (custom_resource_pool_index_var == nullptr) {
+			// Pool resource with static indexing (e.g. ResourcePoolFoo[0])
+			return _custom_resource;
+		} else {
+			// Pool resource with dynamic indexing (e.g. ResourcePoolFoo[$id])
+			if (!static_evaluation) {
+				// Return resource from pool with dynamic index from ini variable
+				return custom_resource_pool->GetResource(custom_resource_pool_index_var->fval);
+			} else {
+				// During static evaluation (parsing time) we cannot evaluate dynamic indexes
+				// So parsing-time config has to be applied to the entire pool
+				return custom_resource_pool->resource_template;
+			}
+		}
+	}
 }
 
 ID3D11Resource *ResourceCopyTarget::GetResource(
@@ -5824,6 +6082,10 @@ ID3D11Resource *ResourceCopyTarget::GetResource(
 				COMMAND_LIST_LOG(state, "  Unable to get access to fake swap chain\n");
 		}
 		return res;
+		
+	case ResourceCopyTargetType::CUSTOM_RESOURCE_POOL:
+		// Can't "get" resource pool object as a resource
+		return NULL;
 	}
 
 	return NULL;
@@ -6058,6 +6320,8 @@ void ResourceCopyTarget::SetResource(
 		// We can't set values on the CPU directly from here, since the
 		// values won't have finished transferring yet. These will be
 		// set from elsewhere.
+	case ResourceCopyTargetType::CUSTOM_RESOURCE_POOL:
+		// Can't "set" resource pool object
 		break;
 	}
 }
@@ -6110,6 +6374,8 @@ D3D11_BIND_FLAG ResourceCopyTarget::BindFlags(CommandListState *state, D3D11_RES
 		case ResourceCopyTargetType::SWAP_CHAIN:
 		case ResourceCopyTargetType::CPU:
 			// N/A since swap chain can't be set as a destination
+		case ResourceCopyTargetType::CUSTOM_RESOURCE_POOL:
+			// Can't bind flags to resource pool object
 			return (D3D11_BIND_FLAG)0;
 	}
 
@@ -6230,6 +6496,22 @@ float ResourceCopyTarget::GetResourceId(CommandListState* state)
 	resource->Release();
 	if (view)
 		view->Release();
+
+	// Store ID in float32 without losing integer precision (its max preserved integer bitness is 24)
+	return static_cast<float>(id & 0x00FFFFFF);
+}
+
+float ResourceCopyTarget::GetPoolId()
+{
+	CustomResourcePool* pool = custom_resource_pool;
+
+	if (!pool)
+		return 0.0f;
+
+	// Hash 64-bit pointer value to a 24-bit ID
+	uint64_t id = reinterpret_cast<uint64_t>(pool);
+	id ^= id >> 24;
+	id ^= id >> 48;
 
 	// Store ID in float32 without losing integer precision (its max preserved integer bitness is 24)
 	return static_cast<float>(id & 0x00FFFFFF);
