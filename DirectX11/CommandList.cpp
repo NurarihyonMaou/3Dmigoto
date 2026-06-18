@@ -3101,9 +3101,9 @@ static const wchar_t *operator_tokens[] = {
 	// Three character tokens first:
 	L"===", L"!==",
 	// Two character tokens next:
-	L"==", L"!=", L"//", L"<=", L">=", L"&&", L"||", L"**",
+	L"<<", L">>", L"==", L"!=", L"//", L"<=", L">=", L"&&", L"||", L"**",
 	// Single character tokens last:
-	L"(", L")", L"!", L"*", L"/", L"%", L"+", L"-", L"<", L">",
+	L"(", L")", L"!", L"~", L"&", L"|", L"^", L"*", L"/", L"%", L"+", L"-", L"<", L">",
 };
 
 class CommandListSyntaxError: public exception
@@ -3211,7 +3211,7 @@ next_token:
 			// Check if next char after match is namespace opening backslash
 			if (remain[pos] == L'\\') {
 				// Find tokens separation char to prevent namespace search overflow to next namespaced token
-				end_pos = remain.find_first_of(L"=&|+-/*><%!", pos + 1);
+				end_pos = remain.find_first_of(L"=&|+-/*><%!^~", pos + 1);
 				// Find namespace closing backslash aka first backlash starting from the end of string
 				start_pos = remain.rfind(L'\\', end_pos) + 1;
 				// Find the token boundary aka match remaining name (i.e. `var` or `Test`)
@@ -3314,6 +3314,7 @@ static CommandListOperatorFactory<name##T> name;
 
 // Highest level of precedence, allows for negative numbers
 DEFINE_OPERATOR(unary_not_operator,     "!",  (!rhs));
+DEFINE_OPERATOR(bitwise_not_operator,   "~",  (~(int32_t)rhs));
 DEFINE_OPERATOR(unary_plus_operator,    "+",  (+rhs));
 DEFINE_OPERATOR(unary_negate_operator,  "-",  (-rhs));
 
@@ -3328,6 +3329,9 @@ DEFINE_OPERATOR(modulus_operator,       "%",  (fmod(lhs, rhs)));
 
 DEFINE_OPERATOR(addition_operator,      "+",  (lhs + rhs));
 DEFINE_OPERATOR(subtraction_operator,   "-",  (lhs - rhs));
+
+DEFINE_OPERATOR(left_shift_operator,    "<<", ((int32_t)lhs << (int32_t)rhs));
+DEFINE_OPERATOR(right_shift_operator,   ">>", ((int32_t)lhs >> (int32_t)rhs));
 
 DEFINE_OPERATOR(less_operator,          "<",  (lhs < rhs));
 DEFINE_OPERATOR(less_equal_operator,    "<=", (lhs <= rhs));
@@ -3345,6 +3349,10 @@ DEFINE_OPERATOR(inequality_operator,    "!=", (lhs != rhs));
 DEFINE_OPERATOR(identical_operator,     "===",(*(uint32_t*)&lhs == *(uint32_t*)&rhs));
 DEFINE_OPERATOR(not_identical_operator, "!==",(*(uint32_t*)&lhs != *(uint32_t*)&rhs));
 
+DEFINE_OPERATOR(bitwise_and_operator,   "&",  ((int32_t)lhs& (int32_t)rhs));
+DEFINE_OPERATOR(bitwise_xor_operator,   "^",  ((int32_t)lhs ^ (int32_t)rhs));
+DEFINE_OPERATOR(bitwise_or_operator,    "|",  ((int32_t)lhs | (int32_t)rhs));
+
 DEFINE_OPERATOR(and_operator,           "&&", (lhs && rhs));
 
 DEFINE_OPERATOR(or_operator,            "||", (lhs || rhs));
@@ -3353,6 +3361,7 @@ DEFINE_OPERATOR(or_operator,            "||", (lhs || rhs));
 
 static CommandListOperatorFactoryBase *unary_operators[] = {
 	&unary_not_operator,
+	&bitwise_not_operator,
 	&unary_negate_operator,
 	&unary_plus_operator,
 };
@@ -3369,6 +3378,10 @@ static CommandListOperatorFactoryBase *add_subtract_operators[] = {
 	&addition_operator,
 	&subtraction_operator,
 };
+static CommandListOperatorFactoryBase* shift_operators[] = {
+	&left_shift_operator,
+	&right_shift_operator,
+};
 static CommandListOperatorFactoryBase *relational_operators[] = {
 	&less_operator,
 	&less_equal_operator,
@@ -3380,6 +3393,15 @@ static CommandListOperatorFactoryBase *equality_operators[] = {
 	&inequality_operator,
 	&identical_operator,
 	&not_identical_operator,
+};
+static CommandListOperatorFactoryBase* bitwise_and_operators[] = {
+	&bitwise_and_operator,
+};
+static CommandListOperatorFactoryBase* bitwise_xor_operators[] = {
+	&bitwise_xor_operator,
+};
+static CommandListOperatorFactoryBase* bitwise_or_operators[] = {
+	&bitwise_or_operator,
 };
 static CommandListOperatorFactoryBase *and_operators[] = {
 	&and_operator,
@@ -3582,8 +3604,12 @@ bool CommandListExpression::parse(const wstring *expression, const wstring *ini_
 		transform_operators_recursive(&tree, exponent_operators, ARRAYSIZE(exponent_operators), true, false);
 		transform_operators_recursive(&tree, multi_division_operators, ARRAYSIZE(multi_division_operators), false, false);
 		transform_operators_recursive(&tree, add_subtract_operators, ARRAYSIZE(add_subtract_operators), false, false);
+		transform_operators_recursive(&tree, shift_operators, ARRAYSIZE(shift_operators), false, false);
 		transform_operators_recursive(&tree, relational_operators, ARRAYSIZE(relational_operators), false, false);
 		transform_operators_recursive(&tree, equality_operators, ARRAYSIZE(equality_operators), false, false);
+		transform_operators_recursive(&tree, bitwise_and_operators, ARRAYSIZE(bitwise_and_operators), false, false);
+		transform_operators_recursive(&tree, bitwise_xor_operators, ARRAYSIZE(bitwise_xor_operators), false, false);
+		transform_operators_recursive(&tree, bitwise_or_operators, ARRAYSIZE(bitwise_or_operators), false, false);
 		transform_operators_recursive(&tree, and_operators, ARRAYSIZE(and_operators), false, false);
 		transform_operators_recursive(&tree, or_operators, ARRAYSIZE(or_operators), false, false);
 
