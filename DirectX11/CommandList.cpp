@@ -732,10 +732,9 @@ static bool ParseDrawCommandArgs(wstring *val, DrawCommand *operation, bool indi
 			return false;
 
 		if (operation->indirect_buffer.type == ResourceCopyTargetType::CUSTOM_RESOURCE) {
-			// Fucking C++ making this line 3x longer than it should be:
-			operation->indirect_buffer.custom_resource->misc_flags = (D3D11_RESOURCE_MISC_FLAG)
-				(operation->indirect_buffer.custom_resource->misc_flags
-				 | D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS);
+			CustomResource* custom_resource = operation->indirect_buffer.GetCustomResource(true);
+			custom_resource->misc_flags = (D3D11_RESOURCE_MISC_FLAG)
+				(custom_resource->misc_flags | D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS);
 		}
 
 		start = end + 1;
@@ -5096,7 +5095,7 @@ bool ResourceCopyTarget::ParseTarget(const wchar_t *target,
 		if (res == customResources.end())
 			return false;
 
-		custom_resource = &res->second;
+		_custom_resource = &res->second;
 		type = ResourceCopyTargetType::CUSTOM_RESOURCE;
 		return true;
 	}
@@ -5252,11 +5251,12 @@ bool ParseCommandListResourceCopyDirective(const wchar_t *section,
 	// FIXME: The constant buffer bind flag can't be combined with others
 	if (operation->src.type == ResourceCopyTargetType::CUSTOM_RESOURCE &&
 			(operation->options & ResourceCopyOptions::REFERENCE)) {
-		// Fucking C++ making this line 3x longer than it should be:
-		operation->src.custom_resource->bind_flags = (D3D11_BIND_FLAG)
-			(operation->src.custom_resource->bind_flags | operation->dst.BindFlags(NULL, &misc_flags));
-		operation->src.custom_resource->misc_flags = (D3D11_RESOURCE_MISC_FLAG)
-			(operation->src.custom_resource->misc_flags | misc_flags);
+		D3D11_RESOURCE_MISC_FLAG misc_flags = (D3D11_RESOURCE_MISC_FLAG)0;
+		CustomResource* src_custom_resource = operation->src.GetCustomResource(true);
+		src_custom_resource->bind_flags = (D3D11_BIND_FLAG)
+			(src_custom_resource->bind_flags | operation->dst.BindFlags(NULL, &misc_flags));
+		src_custom_resource->misc_flags = (D3D11_RESOURCE_MISC_FLAG)
+			(src_custom_resource->misc_flags | misc_flags);
 	}
 
 	operation->ini_line = L"[" + wstring(section) + L"] " + wstring(key) + L" = " + *val;
@@ -5523,6 +5523,11 @@ bool CommandPlaceholder::noop(bool post, bool ignore_cto_pre, bool ignore_cto_po
 	return true;
 }
 
+CustomResource* ResourceCopyTarget::GetCustomResource(bool static_evaluation)
+{
+	return _custom_resource;
+}
+
 ID3D11Resource *ResourceCopyTarget::GetResource(
 		CommandListState *state,
 		ID3D11View **view,   // Used by textures, render targets, depth/stencil buffers & UAVs
@@ -5711,35 +5716,39 @@ ID3D11Resource *ResourceCopyTarget::GetResource(
 		return res;
 
 	case ResourceCopyTargetType::CUSTOM_RESOURCE:
-		custom_resource->expire(mOrigDevice1, mOrigContext1);
+		{
+			CustomResource* custom_resource = GetCustomResource();
 
-		if (dst)
-			bind_flags = dst->BindFlags(state, &misc_flags);
-		custom_resource->Substantiate(mOrigDevice1, bind_flags, misc_flags);
+			custom_resource->expire(mOrigDevice1, mOrigContext1);
 
-		if (stride)
-			*stride = custom_resource->stride;
-		if (offset)
-			*offset = custom_resource->offset;
-		if (format)
-			*format = custom_resource->format;
-		if (buf_size)
-			*buf_size = custom_resource->buf_size;
+			if (dst)
+				bind_flags = dst->BindFlags(state, &misc_flags);
+			custom_resource->Substantiate(mOrigDevice1, bind_flags, misc_flags);
 
-		if (custom_resource->is_null) {
-			// Optimisation to allow the resource to be set to null
-			// without throwing away the cache so we don't
-			// endlessly create & destroy temporary resources.
-			*view = NULL;
-			return NULL;
+			if (stride)
+				*stride = custom_resource->stride;
+			if (offset)
+				*offset = custom_resource->offset;
+			if (format)
+				*format = custom_resource->format;
+			if (buf_size)
+				*buf_size = custom_resource->buf_size;
+
+			if (custom_resource->is_null) {
+				// Optimisation to allow the resource to be set to null
+				// without throwing away the cache so we don't
+				// endlessly create & destroy temporary resources.
+				*view = NULL;
+				return NULL;
+			}
+
+			if (custom_resource->view)
+				custom_resource->view->AddRef();
+			*view = custom_resource->view;
+			if (custom_resource->resource)
+				custom_resource->resource->AddRef();
+			return custom_resource->resource;
 		}
-
-		if (custom_resource->view)
-			custom_resource->view->AddRef();
-		*view = custom_resource->view;
-		if (custom_resource->resource)
-			custom_resource->resource->AddRef();
-		return custom_resource->resource;
 
 	case ResourceCopyTargetType::INI_PARAMS:
 		if (mHackerDevice->mIniResourceView)
@@ -5982,6 +5991,9 @@ void ResourceCopyTarget::SetResource(
 		break;
 
 	case ResourceCopyTargetType::CUSTOM_RESOURCE:
+	{
+		CustomResource* custom_resource = GetCustomResource();
+
 		custom_resource->stride = stride;
 		custom_resource->offset = offset;
 		custom_resource->format = format;
@@ -6019,7 +6031,7 @@ void ResourceCopyTarget::SetResource(
 				custom_resource->resource->AddRef();
 		}
 		break;
-
+	}
 	case ResourceCopyTargetType::THIS_RESOURCE:
 		if (state->this_target)
 			return state->this_target->SetResource(state, res, view, stride, offset, format, buf_size);
@@ -6070,9 +6082,12 @@ D3D11_BIND_FLAG ResourceCopyTarget::BindFlags(CommandListState *state, D3D11_RES
 		case ResourceCopyTargetType::UNORDERED_ACCESS_VIEW:
 			return D3D11_BIND_UNORDERED_ACCESS;
 		case ResourceCopyTargetType::CUSTOM_RESOURCE:
+		{
+			CustomResource* custom_resource = GetCustomResource();
 			if (misc_flags)
 				*misc_flags = custom_resource->misc_flags;
 			return custom_resource->bind_flags;
+		}
 		case ResourceCopyTargetType::THIS_RESOURCE:
 			if (state) {
 				if (state->this_target)
@@ -6343,8 +6358,10 @@ static ID3D11Buffer *RecreateCompatibleBuffer(
 		*buf_dst_size = new_desc.ByteWidth;
 	}
 
-	if (dst && dst->type == ResourceCopyTargetType::CUSTOM_RESOURCE)
-		dst->custom_resource->OverrideBufferDesc(&new_desc);
+	if (dst && dst->type == ResourceCopyTargetType::CUSTOM_RESOURCE) {
+		CustomResource* dst_custom_resource = dst->GetCustomResource();
+		dst_custom_resource->OverrideBufferDesc(&new_desc);
+	}
 
 	return GetResourceFromPool<ID3D11Buffer, D3D11_BUFFER_DESC, &ID3D11Device::CreateBuffer>
 		(ini_line, src_resource, dst_resource, resource_pool, state, &new_desc);
@@ -6597,8 +6614,10 @@ static ResourceType* RecreateCompatibleTexture(
 	// generate mip-maps just clear it out:
 	new_desc.MiscFlags &= ~D3D11_RESOURCE_MISC_GENERATE_MIPS;
 
-	if (dst && dst->type == ResourceCopyTargetType::CUSTOM_RESOURCE)
-		dst->custom_resource->OverrideTexDesc(&new_desc);
+	if (dst && dst->type == ResourceCopyTargetType::CUSTOM_RESOURCE) {
+		CustomResource* dst_custom_resource = dst->GetCustomResource();
+		dst_custom_resource->OverrideTexDesc(&new_desc);
+	}
 
 	return GetResourceFromPool<ResourceType, DescType, CreateTexture>
 		(ini_line, src_resource, dst_resource, resource_pool, state, &new_desc);
@@ -7580,23 +7599,25 @@ void ResourceCopyOperation::run(CommandListState *state)
 		// the cache in the ResourceCopyOperation. This will reduce the
 		// number of extra resources we have floating around if copying
 		// something to a single custom resource from multiple shaders.
-		pp_cached_resource = &dst.custom_resource->resource;
-		pp_cached_device = &dst.custom_resource->device;
-		p_resource_pool = &dst.custom_resource->resource_pool;
-		pp_cached_view = &dst.custom_resource->view;
+		CustomResource* dst_custom_resource = dst.GetCustomResource();
 
-		if (dst.custom_resource->max_copies_per_frame) {
-			if (dst.custom_resource->frame_no != G->frame_no) {
-				dst.custom_resource->frame_no = G->frame_no;
-				dst.custom_resource->copies_this_frame = 1;
-			} else if (dst.custom_resource->copies_this_frame++ >= dst.custom_resource->max_copies_per_frame) {
+		pp_cached_resource = &dst_custom_resource->resource;
+		pp_cached_device = &dst_custom_resource->device;
+		p_resource_pool = &dst_custom_resource->resource_pool;
+		pp_cached_view = &dst_custom_resource->view;
+
+		if (dst_custom_resource->max_copies_per_frame) {
+			if (dst_custom_resource->frame_no != G->frame_no) {
+				dst_custom_resource->frame_no = G->frame_no;
+				dst_custom_resource->copies_this_frame = 1;
+			} else if (dst_custom_resource->copies_this_frame++ >= dst_custom_resource->max_copies_per_frame) {
 				COMMAND_LIST_LOG(state, "  max_copies_per_frame exceeded\n");
 				Profiling::max_copies_per_frame_exceeded++;
 				return;
 			}
 		}
 
-		dst.custom_resource->OverrideOutOfBandInfo(&format, &stride);
+		dst_custom_resource->OverrideOutOfBandInfo(&format, &stride);
 	}
 
 	FillInMissingInfo(src.type, src_resource, src_view, &stride, &offset, &buf_src_size, &format);

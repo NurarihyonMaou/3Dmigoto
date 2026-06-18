@@ -575,6 +575,8 @@ enum class ResourceCopyTargetEvaluationMode {
 };
 
 class ResourceCopyTarget {
+private:
+	CustomResource* _custom_resource;  // Read access should go via GetCustomResource
 public:
 	ResourceCopyTargetType type;
 	wchar_t shader_type;
@@ -587,11 +589,12 @@ public:
 		evaluation_mode(ResourceCopyTargetEvaluationMode::RESOURCE),
 		shader_type(L'\0'),
 		slot(0),
-		custom_resource(NULL),
+		_custom_resource(NULL),
 		forbid_view_cache(false)
 	{}
 
 	bool ParseTarget(const wchar_t *target, bool is_source, const wstring *ini_namespace);
+	CustomResource* GetCustomResource(bool static_evaluation = false);
 	ID3D11Resource *GetResource(CommandListState *state,
 			ID3D11View **view,
 			UINT *stride,
