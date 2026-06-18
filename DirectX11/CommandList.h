@@ -569,6 +569,11 @@ enum class ResourceCopyTargetType {
 	CPU, // For staging resources to the CPU
 };
 
+enum class ResourceCopyTargetEvaluationMode {
+	RESOURCE,
+	RESOURCE_IDENTITY,
+};
+
 class ResourceCopyTarget {
 public:
 	ResourceCopyTargetType type;
@@ -579,6 +584,7 @@ public:
 
 	ResourceCopyTarget() :
 		type(ResourceCopyTargetType::INVALID),
+		evaluation_mode(ResourceCopyTargetEvaluationMode::RESOURCE),
 		shader_type(L'\0'),
 		slot(0),
 		custom_resource(NULL),
@@ -604,6 +610,7 @@ public:
 			CommandListState *state,
 			bool *resource_found,
 			TextureOverrideMatches *matches);
+	float GetResourceId(CommandListState* state);
 	D3D11_BIND_FLAG BindFlags(CommandListState *state, D3D11_RESOURCE_MISC_FLAG *misc_flags=NULL);
 };
 

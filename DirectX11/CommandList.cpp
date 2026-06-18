@@ -2407,45 +2407,57 @@ static void UpdateScissorInfo(CommandListState *state)
 
 float CommandListOperand::process_texture_filter(CommandListState *state)
 {
-	TextureOverrideMatches matches;
-	TextureOverrideMatches::reverse_iterator rit;
-	bool resource_found;
+	switch (texture_filter_target.evaluation_mode)
+	{
+		case ResourceCopyTargetEvaluationMode::RESOURCE:
+		{
+			TextureOverrideMatches matches;
+			TextureOverrideMatches::reverse_iterator rit;
+			bool resource_found;
 
-	texture_filter_target.FindTextureOverrides(state, &resource_found, &matches);
+			texture_filter_target.FindTextureOverrides(state, &resource_found, &matches);
 
-	// If there is no resource bound we want to return a special value that
-	// is distinct from simply not finding a texture override section. For
-	// backwards compatibility we use negative zero -0.0, because any
-	// existing fixes that test for zero/non-zero to check if a matching
-	// [TextureOverride] is present would expect an unbound texture to
-	// never have a hash and therefore be equal to 0, and -0.0 *is* equal
-	// to +0, so these will continue to work. To explicitly test for an
-	// unassigned resource, use this HLSL to reinterpret the values as
-	// integers and check the sign bit:
-	//
-	// if (asint(IniParams[0].x) == asint(-0.0)) { ... }
-	//
-	if (!resource_found)
-		return -0.0;
+			// If there is no resource bound we want to return a special value that
+			// is distinct from simply not finding a texture override section. For
+			// backwards compatibility we use negative zero -0.0, because any
+			// existing fixes that test for zero/non-zero to check if a matching
+			// [TextureOverride] is present would expect an unbound texture to
+			// never have a hash and therefore be equal to 0, and -0.0 *is* equal
+			// to +0, so these will continue to work. To explicitly test for an
+			// unassigned resource, use this HLSL to reinterpret the values as
+			// integers and check the sign bit:
+			//
+			// if (asint(IniParams[0].x) == asint(-0.0)) { ... }
+			//
+			if (!resource_found)
+				return -0.0f;
 
-	// A resource was bound, but no matching texture override was found:
-	if (matches.empty())
-		return 0;
+			// A resource was bound, but no matching texture override was found:
+			if (matches.empty())
+				return 0.0f;
 
-	// If there are multiple matches, we want the filter_index with the
-	// highest priority, which will be the last in the list that has a
-	// filter index. In the future we may also want a namespaced version of
-	// this (and checktextureoverride) to limit the check to sections
-	// appearing in the same namespace or with a given prefix (but we don't
-	// want to do string processing on the namespace here - the candidates
-	// should already be narrowed down during ini parsing):
-	for (rit = matches.rbegin(); rit != matches.rend(); rit++) {
-		if ((*rit)->filter_index != FLT_MAX)
-			return (*rit)->filter_index;
+			// If there are multiple matches, we want the filter_index with the
+			// highest priority, which will be the last in the list that has a
+			// filter index. In the future we may also want a namespaced version of
+			// this (and checktextureoverride) to limit the check to sections
+			// appearing in the same namespace or with a given prefix (but we don't
+			// want to do string processing on the namespace here - the candidates
+			// should already be narrowed down during ini parsing):
+			for (rit = matches.rbegin(); rit != matches.rend(); rit++) {
+				if ((*rit)->filter_index != FLT_MAX)
+					return (*rit)->filter_index;
+			}
+
+			// No match had a filter_index, but there was at least one match:
+			return 1.0f;
+		}
+
+		case ResourceCopyTargetEvaluationMode::RESOURCE_IDENTITY:
+			return texture_filter_target.GetResourceId(state);
+
+		default:
+			return 0.0f;
 	}
-
-	// No match had a filter_index, but there was at least one match:
-	return 1.0;
 }
 
 float CommandListOperand::process_shader_filter(CommandListState *state)
@@ -3170,7 +3182,7 @@ next_token:
 		//   doesn't work if custom resources are checked. If we need
 		//   to match these for some other reason, we could add \ and .
 		//   to this list, which will cover most namespaced resources.
-		pos = remain.find_first_not_of(L"abcdefghijklmnopqrstuvwxyz_-0123456789");
+		pos = remain.find_first_not_of(L"@abcdefghijklmnopqrstuvwxyz_-0123456789");
 		if (pos) {
 			token = remain.substr(0, pos);
 			ret = texture_filter_target.ParseTarget(token.c_str(), true, ini_namespace);
@@ -4999,7 +5011,12 @@ bool ResourceCopyTarget::ParseTarget(const wchar_t *target,
 {
 	int ret, len;
 	size_t length = wcslen(target);
-	CustomResources::iterator res;
+
+	if (target[0] == L'@') {
+		evaluation_mode = ResourceCopyTargetEvaluationMode::RESOURCE_IDENTITY;
+		target++;
+		length--;
+	}
 
 	ret = swscanf_s(target, L"%lcs-cb%u%n", &shader_type, 1, &slot, &len);
 	if (ret == 2 && len == length && slot < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT) {
@@ -6179,6 +6196,28 @@ void ResourceCopyTarget::FindTextureOverrides(CommandListState *state, bool *res
 	resource->Release();
 	if (view)
 		view->Release();
+}
+
+float ResourceCopyTarget::GetResourceId(CommandListState* state)
+{
+	ID3D11View* view = NULL;
+
+	ID3D11Resource* resource = GetResource(state, &view, NULL, NULL, NULL, NULL);
+
+	if (!resource)
+		return 0.0f;
+
+	// Hash 64-bit pointer value to a 24-bit ID
+	uint64_t id = reinterpret_cast<uint64_t>(resource);
+	id ^= id >> 24;
+	id ^= id >> 48;
+
+	resource->Release();
+	if (view)
+		view->Release();
+
+	// Store ID in float32 without losing integer precision (its max preserved integer bitness is 24)
+	return static_cast<float>(id & 0x00FFFFFF);
 }
 
 static bool IsCoersionToStructuredBufferRequired(ID3D11View *view, UINT stride,
