@@ -986,17 +986,53 @@ static bool GetIniStringAndLog(const wchar_t *section, const wchar_t *key,
 	return rc;
 }
 
+static float GetIniConstant(const wchar_t* section, const wchar_t* val, bool* found)
+{
+	if (!val || val[0] != L'$') {
+		if (found)
+			*found = false;
+		return 0;
+	}
+
+	wstring var_name(val);
+	wstring ini_namespace = ini_sections[section].ini_namespace;
+
+	CommandListVariables::iterator var = command_list_globals.find(get_namespaced_var_name_lower(var_name, &ini_namespace));
+
+	if (var == command_list_globals.end()) {
+		IniWarningW(L"Constant variable %ls is not defined!\n - [%ls] @ [%ls]\n", val, section, ini_namespace.c_str());
+		if (found)
+			*found = false;
+		return 0;
+	}
+
+	if (found)
+		*found = true;
+
+	return var->second.fval;
+}
 
 float GetIniFloat(const wchar_t *section, const wchar_t *key, float def, bool *found)
 {
 	wchar_t val[32];
 	float ret = def;
-	int len;
 
 	if (found)
 		*found = false;
 
 	if (GetIniString(section, key, 0, val, 32)) {
+		bool constant_found = false;
+
+		ret = GetIniConstant(section, val, &constant_found);
+
+		if (constant_found) {
+			if (found)
+				*found = true;
+			LogInfo("  %S=%f\n", key, ret);
+			return ret;
+		}
+
+		int len;
 		if (swscanf_s(val, L"%f%n", &ret, &len) != 1 || len != wcslen(val)) {
 			wstring ini_namespace = ini_sections[section].ini_namespace;
 			if (ini_namespace.empty()) {
@@ -1018,13 +1054,24 @@ int GetIniInt(const wchar_t *section, const wchar_t *key, int def, bool *found, 
 {
 	wchar_t val[32];
 	int ret = def;
-	int len;
 
 	if (found)
 		*found = false;
 
 	// Not using GetPrivateProfileInt as it doesn't tell us if the key existed
 	if (GetIniString(section, key, 0, val, 32)) {
+		bool constant_found = false;
+
+		ret = (int)GetIniConstant(section, val, &constant_found);
+
+		if (constant_found) {
+			if (found)
+				*found = true;
+			LogInfo("  %S=%d\n", key, ret);
+			return ret;
+		}
+
+		int len;
 		if (swscanf_s(val, L"%d%n", &ret, &len) != 1 || len != wcslen(val)) {
 			if (warn) {
 				wstring ini_namespace = ini_sections[section].ini_namespace;
@@ -2140,11 +2187,6 @@ static void ParseConstantsSection()
 		// command list won't consider it in the 2nd pass:
 		next = section->erase(entry);
 	}
-
-	// Second pass for the command list:
-	G->constants_command_list.clear();
-	G->post_constants_command_list.clear();
-	ParseCommandList(L"Constants", &G->constants_command_list, &G->post_constants_command_list, NULL);
 }
 
 static wchar_t *true_false_overrule[] = {
@@ -2817,42 +2859,6 @@ static void parse_fuzzy_numeric_match_expression(const wchar_t *setting, FuzzyMa
 		return parse_fuzzy_numeric_match_expression_error(ptr);
 }
 
-float GetConstantIniVariable(const wchar_t* section, const wchar_t* key, float def, bool* found)
-{
-	std::string tmp;
-	std::wstring var_name;
-	float ret = def;
-
-	if (found)
-		*found = false;
-
-	if (GetIniString(section, key, NULL, &tmp)) {
-
-		var_name = wstring(tmp.begin(), tmp.end());
-		wstring ini_namespace = ini_sections[section].ini_namespace;
-		CommandListVariables::iterator var = command_list_globals.end();
-
-		var = command_list_globals.find(get_namespaced_var_name_lower(var_name, &ini_namespace));
-
-		if (var != command_list_globals.end()) {
-			if (found)
-				*found = true;
-			ret = var->second.fval;
-		}
-		else {
-			ret = GetIniFloat(section, key, def, found);
-			if (found) {
-				if (ret != def)
-					*found = true;
-				else
-					IniWarningW(L"Constant variable %S is not defined!\n - [%ls] @ [%ls]\n", tmp.c_str(), section, ini_namespace.c_str());
-			}
-		}
-	}
-
-	return ret;
-}
-
 static void parse_texture_override_common(const wchar_t *id, TextureOverride *override, bool register_command_lists)
 {
 	wchar_t setting[MAX_PATH];
@@ -2874,7 +2880,7 @@ static void parse_texture_override_common(const wchar_t *id, TextureOverride *ov
 	if (G->allow_buffer_resize) 
 	{
 		// Handle buffer resize aka vertex limit raise feature.
-		int override_vertex_count = (int)GetConstantIniVariable(id, L"override_vertex_count", -1.0f, &found);
+		int override_vertex_count = GetIniInt(id, L"override_vertex_count", -1.0f, &found);
 		if (override_vertex_count > 0) {
 			// Ensure that stride is specified.
 			int override_byte_stride = GetIniInt(id, L"override_byte_stride", -1, NULL);
@@ -2886,7 +2892,7 @@ static void parse_texture_override_common(const wchar_t *id, TextureOverride *ov
 			override->override_byte_width = override_byte_stride * override_vertex_count;
 
 			// Handle UAV resize
-			int uav_byte_stride = (int)GetConstantIniVariable(id, L"uav_byte_stride", -1.0f, &found);
+			int uav_byte_stride = GetIniInt(id, L"uav_byte_stride", -1.0f, &found);
 			if (uav_byte_stride > 0) {
 				// Use StructureByteStride override (useful when actual buffer stride is different from the one declared by a game)
 				override->override_num_elements = override_vertex_count * override_byte_stride / uav_byte_stride;
@@ -4478,13 +4484,18 @@ void LoadConfigFile()
 	// [Preset]s may refer to:
 	EnumeratePresetOverrideSections();
 
-	// Must be done before any command lists that may refer to them:
-	ParseResourceSections();
-
 	// This is the only command list we permit to allocate global variables,
 	// so we parse it before all other command lists, key bindings and
 	// presets that may use those variables.
 	ParseConstantsSection();
+
+	// Must be done before any command lists that may refer to them:
+	ParseResourceSections();
+
+	// Second pass for the Constants command list:
+	G->constants_command_list.clear();
+	G->post_constants_command_list.clear();
+	ParseCommandList(L"Constants", &G->constants_command_list, &G->post_constants_command_list, NULL);
 
 	// Must be done after [Constants] has allocated global variables:
 	RegisterPresetKeyBindings();
