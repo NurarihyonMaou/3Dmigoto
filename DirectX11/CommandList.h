@@ -579,6 +579,7 @@ private:
 	CustomResource* _custom_resource;  // Read access should go via GetCustomResource
 public:
 	ResourceCopyTargetType type;
+	ResourceCopyTargetEvaluationMode evaluation_mode;
 	wchar_t shader_type;
 	unsigned slot;
 	CustomResource *custom_resource;

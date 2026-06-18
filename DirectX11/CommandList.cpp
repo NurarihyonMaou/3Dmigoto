@@ -5087,7 +5087,7 @@ bool ResourceCopyTarget::ParseTarget(const wchar_t *target,
 		wstring resource_id(target);
 		wstring namespaced_section;
 
-		res = customResources.end();
+		CustomResources::iterator res = customResources.end();
 		if (get_namespaced_section_name_lower(&resource_id, ini_namespace, &namespaced_section))
 			res = customResources.find(namespaced_section);
 		if (res == customResources.end())
