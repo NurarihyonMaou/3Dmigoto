@@ -6669,7 +6669,7 @@ static void RecreateCompatibleResource(
 
 template <typename DescType>
 static void FillOutBufferDescCommon(DescType *desc, UINT stride,
-		UINT offset, UINT buf_src_size)
+		UINT offset, DXGI_FORMAT format, UINT buf_src_size)
 {
 	// The documentation on the buffer part of the description is
 	// misleading.
@@ -6697,6 +6697,21 @@ static void FillOutBufferDescCommon(DescType *desc, UINT stride,
 	// any change here would need careful consideration as to backwards
 	// compatibility.
 	if (stride) {
+		// For typed buffer views, the view element size is determined by the
+		// DXGI format, not by the buffer's original vertex/structure stride.
+		// NumElements must therefore be computed using the format size whenever
+		// a typed format is specified.
+		//
+		// Example:
+		//   format = R32_FLOAT
+		//   buffer stride = 12
+		//   buffer size = 1200
+		//
+		// The view exposes 1200 / 4 = 300 elements, since each view element is
+		// one 32-bit float.
+		if (format != (DXGI_FORMAT)-1 && format != DXGI_FORMAT_UNKNOWN) {
+			stride = dxgi_format_size(format);
+		}
 		desc->FirstElement = offset / stride;
 		desc->NumElements = (buf_src_size - offset) / stride;
 	} else {
@@ -6742,10 +6757,10 @@ static D3D11_SHADER_RESOURCE_VIEW_DESC* FillOutBufferDesc(ID3D11Buffer *buf,
 	       // don't:
 	       desc->Format = DXGI_FORMAT_R32_TYPELESS;
 	       stride = 4;
-	       FillOutBufferDescCommon<D3D11_BUFFEREX_SRV>(&desc->BufferEx, stride, offset, buf_src_size);
+	       FillOutBufferDescCommon<D3D11_BUFFEREX_SRV>(&desc->BufferEx, stride, offset, desc->Format, buf_src_size);
 	} else {
 		desc->ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-		FillOutBufferDescCommon<D3D11_BUFFER_SRV>(&desc->Buffer, stride, offset, buf_src_size);
+		FillOutBufferDescCommon<D3D11_BUFFER_SRV>(&desc->Buffer, stride, offset, desc->Format, buf_src_size);
 	}
 	return desc;
 }
@@ -6755,7 +6770,7 @@ static D3D11_RENDER_TARGET_VIEW_DESC* FillOutBufferDesc(ID3D11Buffer *buf,
 {
 	desc->ViewDimension = D3D11_RTV_DIMENSION_BUFFER;
 
-	FillOutBufferDescCommon<D3D11_BUFFER_RTV>(&desc->Buffer, stride, offset, buf_src_size);
+	FillOutBufferDescCommon<D3D11_BUFFER_RTV>(&desc->Buffer, stride, offset, desc->Format, buf_src_size);
 	return desc;
 }
 static D3D11_UNORDERED_ACCESS_VIEW_DESC* FillOutBufferDesc(ID3D11Buffer *buf,
@@ -6772,7 +6787,7 @@ static D3D11_UNORDERED_ACCESS_VIEW_DESC* FillOutBufferDesc(ID3D11Buffer *buf,
 	}
 	// TODO Support buffer UAV flags for append and counter buffers.
 
-	FillOutBufferDescCommon<D3D11_BUFFER_UAV>(&desc->Buffer, stride, offset, buf_src_size);
+	FillOutBufferDescCommon<D3D11_BUFFER_UAV>(&desc->Buffer, stride, offset, desc->Format, buf_src_size);
 	return desc;
 }
 static D3D11_DEPTH_STENCIL_VIEW_DESC* FillOutBufferDesc(ID3D11Buffer *buf,
