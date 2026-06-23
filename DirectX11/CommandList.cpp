@@ -2454,6 +2454,22 @@ float CommandListOperand::process_texture_filter(CommandListState *state)
 		case ResourceCopyTargetEvaluationMode::RESOURCE_IDENTITY:
 			return texture_filter_target.GetResourceId(state);
 
+		case ResourceCopyTargetEvaluationMode::RESOURCE_STRIDE:
+			return texture_filter_target.GetResourceStride(state);
+
+		case ResourceCopyTargetEvaluationMode::RESOURCE_SIZE:
+			return texture_filter_target.GetResourceSize(state);
+
+		case ResourceCopyTargetEvaluationMode::RESOURCE_SOURCE_STRIDE:
+		{
+			CustomResource* custom_resource = texture_filter_target.GetCustomResource();
+			if (custom_resource != nullptr)
+				return (float)custom_resource->source_stride;
+			else
+				// Return -1 for ResourceCopyTarget with non-custom resource
+				return -1.0f;
+		}
+
 		case ResourceCopyTargetEvaluationMode::POOL_INDEX:
 		{
 			CustomResource* custom_resource = texture_filter_target.GetCustomResource();
@@ -3204,7 +3220,7 @@ next_token:
 		//   doesn't work if custom resources are checked. If we need
 		//   to match these for some other reason, we could add \ and .
 		//   to this list, which will cover most namespaced resources.
-		pos = remain.find_first_not_of(L"@#abcdefghijklmnopqrstuvwxyz_-0123456789[$.]");
+		pos = remain.find_first_not_of(L"@#abcdefghijklmnopqrstuvwxyz_-0123456789[$.]>");
 		if (pos) {
 			token = remain.substr(0, pos);
 			ret = texture_filter_target.ParseTarget(token.c_str(), true, ini_namespace, scope);
@@ -4225,6 +4241,7 @@ CustomResource::CustomResource() :
 	offset(0),
 	buf_size(0),
 	format(DXGI_FORMAT_UNKNOWN),
+	source_stride(0),
 	max_copies_per_frame(0),
 	frame_no(0),
 	copies_this_frame(0),
@@ -4359,6 +4376,8 @@ void CustomResource::LoadBufferFromFile(ID3D11Device *mOrigDevice1)
 	}
 
 	SubstantiateBuffer(mOrigDevice1, &buf, size);
+
+	buf_size = (UINT)size;
 
 out_delete:
 	free(buf);
@@ -5179,18 +5198,46 @@ bool ResourceCopyTarget::ParseTarget(const wchar_t *target,
 {
 	int ret, len;
 	size_t length = wcslen(target);
+	std::wstring temp_target;
 
-	if (target[0] == L'@') {
-		evaluation_mode = ResourceCopyTargetEvaluationMode::RESOURCE_IDENTITY;
-		target++;
-		length--;
+	switch (target[0]) {
+		case L'@':
+			evaluation_mode = ResourceCopyTargetEvaluationMode::RESOURCE_IDENTITY;
+			target++;
+			length--;
+			break;
+		case L'#':
+			evaluation_mode = ResourceCopyTargetEvaluationMode::POOL_INDEX;
+			target++;
+			length--;
+			break;
 	}
-	else if (target[0] == L'#') {
-		evaluation_mode = ResourceCopyTargetEvaluationMode::POOL_INDEX;
-		target++;
-		length--;
+
+	struct SuffixInfo {
+		const wchar_t* suffix;
+		size_t len; // including "->"
+		ResourceCopyTargetEvaluationMode mode;
+	};
+
+	static constexpr SuffixInfo suffixes[] = {
+		{ L"->sourcestride", 14, ResourceCopyTargetEvaluationMode::RESOURCE_SOURCE_STRIDE },
+		{ L"->stride",        8, ResourceCopyTargetEvaluationMode::RESOURCE_STRIDE },
+		{ L"->size",          6, ResourceCopyTargetEvaluationMode::RESOURCE_SIZE },
+	};
+
+	if (length >= 8) // Smallest possible match atm is "ib->size"
+	{ 
+		for (const auto& s : suffixes) {
+			if (length >= s.len + 2 && target[length - s.len + 1] == L'>' && !wmemcmp(target + length - s.len, s.suffix, s.len)) {
+				evaluation_mode = s.mode;
+				length -= s.len;
+				temp_target.assign(target, length);
+				target = temp_target.c_str();
+				break;
+			}
+		}
 	}
-	
+
 	ret = swscanf_s(target, L"%lcs-cb%u%n", &shader_type, 1, &slot, &len);
 	if (ret == 2 && len == length && slot < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT) {
 		type = ResourceCopyTargetType::CONSTANT_BUFFER;
@@ -5256,8 +5303,7 @@ bool ResourceCopyTarget::ParseTarget(const wchar_t *target,
 
 	if (length >= 9 && !wcsncmp(target, L"resource", 8)) {
 		// Exit early for non-resource type evaluation modes (essentially on invalid syntax)
-		if (evaluation_mode != ResourceCopyTargetEvaluationMode::RESOURCE &&
-			evaluation_mode != ResourceCopyTargetEvaluationMode::RESOURCE_IDENTITY)
+		if (!(evaluation_mode & ResourceCopyTargetEvaluationMode::RESOURCE_MASK))
 			return false;
 
 		// section name should already have been transformed to lower
@@ -6539,6 +6585,112 @@ float ResourceCopyTarget::GetPoolId()
 
 	// Store ID in float32 without losing integer precision (its max preserved integer bitness is 24)
 	return static_cast<float>(id & 0x00FFFFFF);
+}
+
+namespace ResourcePropertyResult {
+	constexpr float UNKNOWN             = -1.0f;
+	constexpr float RESOURCE_NOT_FOUND  = -2.0f;
+	constexpr float NOT_A_BUFFER        = -3.0f;
+}
+
+float ResourceCopyTarget::GetResourceStride(CommandListState* state)
+{
+	if (type == ResourceCopyTargetType::CUSTOM_RESOURCE) {
+		if (auto custom_resource = GetCustomResource()) {
+			if (custom_resource->override_stride != -1)
+				return (float)custom_resource->override_stride;
+
+			if (custom_resource->override_format != (DXGI_FORMAT)-1 &&
+				custom_resource->override_format != DXGI_FORMAT_UNKNOWN)
+					return (float)dxgi_format_size(custom_resource->override_format);
+		}
+	}
+
+	ID3D11View* view = nullptr;
+	UINT stride = 0;
+	DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+
+	ID3D11Resource* resource = GetResource(state, &view, &stride, nullptr, &format, nullptr);
+
+	float ret = ResourcePropertyResult::UNKNOWN;
+
+	if (!resource) {
+		ret = ResourcePropertyResult::RESOURCE_NOT_FOUND;
+	} else {
+		if (stride != 0) {
+			ret = (float)stride;
+		} else {
+			D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+			resource->GetType(&dimension);
+
+			if (dimension != D3D11_RESOURCE_DIMENSION_BUFFER) {
+				ret = ResourcePropertyResult::NOT_A_BUFFER;
+			} else {
+				auto buf = static_cast<ID3D11Buffer*>(resource);
+
+				D3D11_BUFFER_DESC desc;
+				buf->GetDesc(&desc);
+
+				if (desc.StructureByteStride != 0)
+					ret = (float)desc.StructureByteStride;
+			}
+		}
+
+		resource->Release();
+	}
+
+	if (view)
+		view->Release();
+
+	return ret;
+}
+
+float ResourceCopyTarget::GetResourceSize(CommandListState* state)
+{
+	if (type == ResourceCopyTargetType::CUSTOM_RESOURCE) {
+		if (auto custom_resource = GetCustomResource()) {
+			if (custom_resource->buf_size > 0)
+				return (float)custom_resource->buf_size;
+		}
+	}
+
+	ID3D11View* view = nullptr;
+	UINT stride = 0, size = 0;
+	DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+
+	ID3D11Resource* resource = GetResource(state, &view, &stride, nullptr, &format, &size);
+
+	float ret = ResourcePropertyResult::UNKNOWN;
+
+	if (!resource) {
+		ret = ResourcePropertyResult::RESOURCE_NOT_FOUND;
+	} else {
+		if (size > 0) {
+			ret = (float)size;
+		} else {
+			D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+			resource->GetType(&dimension);
+
+			if (dimension != D3D11_RESOURCE_DIMENSION_BUFFER) {
+				ret = ResourcePropertyResult::NOT_A_BUFFER;
+			} else {
+				auto buf = static_cast<ID3D11Buffer*>(resource);
+
+				D3D11_BUFFER_DESC desc;
+				buf->GetDesc(&desc);
+
+				if (desc.ByteWidth != 0)
+					ret = (float)desc.ByteWidth;
+			}
+		}
+
+		resource->Release();
+	}
+
+	if (view)
+		view->Release();
+
+	return ret;
 }
 
 static bool IsCoersionToStructuredBufferRequired(ID3D11View *view, UINT stride,
@@ -7924,6 +8076,13 @@ void ResourceCopyOperation::run(CommandListState *state)
 		}
 
 		dst_custom_resource->OverrideOutOfBandInfo(&format, &stride);
+
+		if (src.type == ResourceCopyTargetType::CUSTOM_RESOURCE) {
+			CustomResource* src_custom_resource = src.GetCustomResource();
+			dst_custom_resource->source_stride = src_custom_resource->source_stride > 0 ? src_custom_resource->source_stride : stride;
+		} else {
+			dst_custom_resource->source_stride = stride;
+		}
 	}
 
 	FillInMissingInfo(src.type, src_resource, src_view, &stride, &offset, &buf_src_size, &format);
