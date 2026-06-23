@@ -4229,6 +4229,7 @@ CustomResource::CustomResource() :
 	max_copies_per_frame(0),
 	frame_no(0),
 	copies_this_frame(0),
+	pool(nullptr),
 	pool_index(-2),
 	override_type(CustomResourceType::INVALID),
 	override_bind_flags(CustomResourceBindFlags::INVALID),
@@ -4703,6 +4704,8 @@ CustomResource* CustomResourcePool::InitializeResource(int pool_index)
 
 	CustomResource* custom_resource = &customResources[resource_id];
 	custom_resource->name = resource_id;
+
+	custom_resource->pool = this;
 	custom_resource->pool_index = pool_index;
 
 	custom_resource->max_copies_per_frame = resource_template->max_copies_per_frame;

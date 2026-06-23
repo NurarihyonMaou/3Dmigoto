@@ -472,6 +472,8 @@ public:
 	void emplace(uint32_t hash, ID3D11Resource *resource, ID3D11Device *device);
 };
 
+class CustomResourcePool;
+
 class CustomResource
 {
 public:
@@ -494,6 +496,8 @@ public:
 	int max_copies_per_frame;
 	unsigned frame_no;
 	int copies_this_frame;
+
+	CustomResourcePool* pool;
 	int pool_index;
 
 	wstring filename;
