@@ -734,8 +734,7 @@ static bool ParseDrawCommandArgs(wstring *val, DrawCommand *operation, bool indi
 
 		if (operation->indirect_buffer.type == ResourceCopyTargetType::CUSTOM_RESOURCE) {
 			CustomResource* custom_resource = operation->indirect_buffer.GetCustomResource(true);
-			custom_resource->misc_flags = (D3D11_RESOURCE_MISC_FLAG)
-				(custom_resource->misc_flags | D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS);
+			custom_resource->AddFlags((D3D11_BIND_FLAG)0, D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS);
 		}
 
 		start = end + 1;
@@ -4260,6 +4259,17 @@ CustomResource::~CustomResource()
 		free(initial_data);
 }
 
+void CustomResource::AddFlags(D3D11_BIND_FLAG extra_bind_flags, D3D11_RESOURCE_MISC_FLAG extra_misc_flags)
+{
+	if (pool) {
+		pool->PropagateFlags(extra_bind_flags, extra_misc_flags);
+		return;
+	}
+
+	bind_flags = (D3D11_BIND_FLAG)(bind_flags | extra_bind_flags);
+	misc_flags = (D3D11_RESOURCE_MISC_FLAG)(misc_flags | extra_misc_flags);
+}
+
 void CustomResource::Substantiate(ID3D11Device *mOrigDevice1,
 		D3D11_BIND_FLAG bind_flags, D3D11_RESOURCE_MISC_FLAG misc_flags)
 {
@@ -4698,6 +4708,19 @@ static int is_dsv_format(DXGI_FORMAT fmt)
 	}
 }
 
+void CustomResourcePool::PropagateFlags(D3D11_BIND_FLAG bind_flags, D3D11_RESOURCE_MISC_FLAG misc_flags)
+{
+	resource_template->bind_flags = (D3D11_BIND_FLAG)(resource_template->bind_flags | bind_flags);
+	resource_template->misc_flags = (D3D11_RESOURCE_MISC_FLAG)(resource_template->misc_flags | misc_flags);
+
+	for (CustomResource* resource : resources) {
+		if (resource) {
+			resource->bind_flags = (D3D11_BIND_FLAG)(resource->bind_flags | bind_flags);
+			resource->misc_flags = (D3D11_RESOURCE_MISC_FLAG)(resource->misc_flags | misc_flags);
+		}
+	}
+}
+
 CustomResource* CustomResourcePool::InitializeResource(int pool_index)
 {
 	wstring resource_id = wstring(name) + L"_" + std::to_wstring(pool_index);
@@ -4731,6 +4754,9 @@ CustomResource* CustomResourcePool::InitializeResource(int pool_index)
 	custom_resource->override_bind_flags = resource_template->override_bind_flags;
 	custom_resource->override_misc_flags = resource_template->override_misc_flags;
 
+	custom_resource->bind_flags = resource_template->bind_flags;
+	custom_resource->misc_flags = resource_template->misc_flags;
+
 	if (resource_template->initial_data != nullptr) {
 		custom_resource->initial_data = resource_template->initial_data;
 		custom_resource->initial_data_size = resource_template->initial_data_size;
@@ -4741,7 +4767,12 @@ CustomResource* CustomResourcePool::InitializeResource(int pool_index)
 	return custom_resource;
 }
 
-CustomResource* CustomResourcePool::GetResource(float id) {
+CustomResource* CustomResourcePool::GetResource(float id, bool static_evaluation) {
+	// During static evaluation (parsing time) we cannot evaluate dynamic indexes
+	// So parsing-time config has to be applied to the entire pool
+	if (static_evaluation)
+		return resource_template;
+
 	if (resources.empty())
 		return nullptr;
 
@@ -5494,12 +5525,9 @@ bool ParseCommandListResourceCopyDirective(const wchar_t *section,
 	// FIXME: The constant buffer bind flag can't be combined with others
 	if (operation->src.type == ResourceCopyTargetType::CUSTOM_RESOURCE &&
 			(operation->options & ResourceCopyOptions::REFERENCE)) {
-		D3D11_RESOURCE_MISC_FLAG misc_flags = (D3D11_RESOURCE_MISC_FLAG)0;
 		CustomResource* src_custom_resource = operation->src.GetCustomResource(true);
-		src_custom_resource->bind_flags = (D3D11_BIND_FLAG)
-			(src_custom_resource->bind_flags | operation->dst.BindFlags(NULL, &misc_flags));
-		src_custom_resource->misc_flags = (D3D11_RESOURCE_MISC_FLAG)
-			(src_custom_resource->misc_flags | misc_flags);
+		D3D11_RESOURCE_MISC_FLAG misc_flags = (D3D11_RESOURCE_MISC_FLAG)0;
+		src_custom_resource->AddFlags(operation->dst.BindFlags(NULL, &misc_flags), misc_flags);
 	}
 
 	operation->ini_line = L"[" + wstring(section) + L"] " + wstring(key) + L" = " + *val;
@@ -5777,14 +5805,7 @@ CustomResource* ResourceCopyTarget::GetCustomResource(bool static_evaluation)
 			return _custom_resource;
 		} else {
 			// Pool resource with dynamic indexing (e.g. ResourcePoolFoo[$id])
-			if (!static_evaluation) {
-				// Return resource from pool with dynamic index from ini variable
-				return custom_resource_pool->GetResource(custom_resource_pool_index_var->fval);
-			} else {
-				// During static evaluation (parsing time) we cannot evaluate dynamic indexes
-				// So parsing-time config has to be applied to the entire pool
-				return custom_resource_pool->resource_template;
-			}
+			return custom_resource_pool->GetResource(custom_resource_pool_index_var->fval, static_evaluation);
 		}
 	}
 }
