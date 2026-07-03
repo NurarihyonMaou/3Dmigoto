@@ -6549,6 +6549,66 @@ void ResourceCopyTarget::FindTextureOverrides(CommandListState *state, bool *res
 		view->Release();
 }
 
+inline float BitCastToFloat(uint32_t bits)
+{
+	float value;
+	memcpy(&value, &bits, sizeof(value));
+	return value;
+}
+
+inline float EncodeFloat30(const uint32_t hash)
+{
+	// IEEE-754 float layout:
+	//   [ sign:1 ][ exponent:8 ][ mantissa:23 ]
+	//
+	// We encode 30 bits as:
+	//   [ exponent payload:7 ][ mantissa payload:23 ]
+	//
+	// The sign bit is always zero, and the exponent range is limited to [1, 128] so we never produce:
+	//   exponent == 0   -> zero / subnormal values
+	//   exponent == 255 -> infinity / NaN values
+	//
+	// This guarantees that float equality behaves exactly like integer equality for all encoded values.
+
+	// Keep 30 bits.
+	constexpr uint32_t payload_mask = 0x3FFFFFFFu; // Lower 30 bits
+	uint32_t payload = hash & payload_mask;
+
+	// Upper 7 bits become the exponent.
+	// Add 1 so the exponent range is [1, 128] instead of [0, 127].
+	uint32_t exponent = 1u + (payload >> 23);
+
+	// Lower 23 bits become the mantissa.
+	constexpr uint32_t mantissa_mask = 0x007FFFFFu; // Lower 23 bits
+	uint32_t mantissa = payload & mantissa_mask;
+
+	// Construct the final IEEE-754 bit pattern.
+	uint32_t float_bits = (exponent << 23) | mantissa;
+
+	// TODO: Replace with std::bit_cast<float> after C++20 upgrade
+	return BitCastToFloat(float_bits);
+}
+
+inline uint64_t HashPointer(const void* p)
+{
+	uint64_t x = reinterpret_cast<uint64_t>(p);
+
+	x ^= x >> 33;
+	x *= 0xff51afd7ed558ccdULL;  // Murmur finalizer for better bit-mixing
+	x ^= x >> 33;
+
+	return x;
+}
+
+inline uint32_t HashUnsigned32(uint32_t u)
+{
+	u ^= u >> 16;
+	u *= 0x85ebca6b; // Murmur finalizer for better bit-mixing
+	u ^= u >> 13;
+
+	return u;
+}
+
 float ResourceCopyTarget::GetResourceId(CommandListState* state)
 {
 	ID3D11View* view = NULL;
@@ -6558,17 +6618,14 @@ float ResourceCopyTarget::GetResourceId(CommandListState* state)
 	if (!resource)
 		return 0.0f;
 
-	// Hash 64-bit pointer value to a 24-bit ID
-	uint64_t id = reinterpret_cast<uint64_t>(resource);
-	id ^= id >> 24;
-	id ^= id >> 48;
-
+	// Hash 64-bit pointer to mix bits
+	uint64_t hash = HashPointer(resource);
 	resource->Release();
 	if (view)
 		view->Release();
 
-	// Store ID in float32 without losing integer precision (its max preserved integer bitness is 24)
-	return static_cast<float>(id & 0x00FFFFFF);
+	// Encode 64-bit hash as float30 to preserve as much precision as possible at low cost.
+	return EncodeFloat30((uint32_t)hash);
 }
 
 float ResourceCopyTarget::GetPoolId()
@@ -6578,13 +6635,11 @@ float ResourceCopyTarget::GetPoolId()
 	if (!pool)
 		return 0.0f;
 
-	// Hash 64-bit pointer value to a 24-bit ID
-	uint64_t id = reinterpret_cast<uint64_t>(pool);
-	id ^= id >> 24;
-	id ^= id >> 48;
+	// Hash 64-bit pointer to mix bits
+	uint64_t hash = HashPointer(pool);
 
-	// Store ID in float32 without losing integer precision (its max preserved integer bitness is 24)
-	return static_cast<float>(id & 0x00FFFFFF);
+	// Encode 64-bit hash as float30 to preserve as much precision as possible at low cost.
+	return EncodeFloat30((uint32_t)hash);
 }
 
 namespace ResourcePropertyResult {
