@@ -1937,8 +1937,6 @@ void ResourceHandleInfo::WriteDataCache(const void* src, size_t size)
 	if (!src)
 		return;
 
-	//LogInfo("WriteDataCache size=%d\n", size);
-
 	InitializeDataCache(size);
 
 	if (cached_data) {
@@ -1949,7 +1947,8 @@ void ResourceHandleInfo::WriteDataCache(const void* src, size_t size)
 	// Full overwrite of CPU snapshot.
 	cached_data = (uint8_t*)src;
 
-	//info->cached_data_hash = crc32c_hw(0, info->cached_data, size);
+	//cached_data_hash = crc32c_hw(0, cached_data, size);
+	//LogInfo("WriteDataCache size=%d, data_hash=%08lx\n", size, cached_data_hash);
 }
 
 void ResourceHandleInfo::WriteDataCacheRegion(const void* src, size_t region_size, UINT offset)
@@ -1981,6 +1980,8 @@ void ResourceHandleInfo::WriteDataCacheRegion(const void* src, size_t region_siz
 	// Invalidate only affected pages (cheap, avoids clearing the whole cache).
 	if (region_hashes_cache)
 		region_hashes_cache->Invalidate(offset, offset + (UINT)region_size);
+
+	//cached_data_hash = crc32c_hw(0, cached_data, cached_data_size);
 }
 
 // Clears all cached region hashes and invalidates the CPU-side buffer snapshot.
@@ -2099,6 +2100,7 @@ static bool CacheBufferData(ID3D11DeviceContext* context, ID3D11Buffer* buffer, 
 	staging->Release();
 	dev->Release();
 
+	//handle_info->cached_data_hash = crc32c_hw(0, handle_info->cached_data, handle_info->cached_data_size);
 	//LogInfo("Fallback CacheBufferData size=%d, hash=%08lx, data_hash=%08lx, pResource=0x%p\n", desc.ByteWidth, handle_info->hash, handle_info->cached_data_hash, buffer);
 
 	return true;
@@ -2193,9 +2195,15 @@ uint32_t GetRegionHash(ID3D11DeviceContext* context, ID3D11Buffer* buffer, UINT 
 		return 0;
 	}
 
-	// Pointer to the start of the requested region within the cached buffer.
-	if (offset > handle_info->cached_data_size || size > handle_info->cached_data_size - offset) {
+	// Pointer to the start of the requested region within the cached buffer cannot be outside of upper bound.
+	if (offset >= handle_info->cached_data_size) {
 		return 0;
+	}
+
+	// Upper bound of requested region must stay within the buffer size.
+	UINT max_region_size = handle_info->cached_data_size - offset;
+	if (size > max_region_size) {
+		size = max_region_size;
 	}
 
 	// Make pointer for given offset in L1 cache (raw data).
