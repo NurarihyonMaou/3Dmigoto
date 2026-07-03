@@ -717,7 +717,7 @@ bail:
 	return false;
 }
 
-static bool ParseDrawCommandArgs(wstring *val, DrawCommand *operation, bool indirect, int nargs, const wstring *ini_namespace, CommandListScope *scope)
+static bool ParseDrawCommandArgs(const wchar_t* section, wstring *val, DrawCommand *operation, bool indirect, int nargs, const wstring *ini_namespace, CommandListScope *scope)
 {
 	size_t start = 0, end;
 	wstring sub;
@@ -734,7 +734,10 @@ static bool ParseDrawCommandArgs(wstring *val, DrawCommand *operation, bool indi
 
 		if (operation->indirect_buffer.type == ResourceCopyTargetType::CUSTOM_RESOURCE) {
 			CustomResource* custom_resource = operation->indirect_buffer.GetCustomResource(true);
-			custom_resource->AddFlags((D3D11_BIND_FLAG)0, D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS);
+			if (!custom_resource->AddFlags((D3D11_BIND_FLAG)0, D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS, true)) {
+				LogOverlayW(LOG_WARNING, L"To use resources with incompatible flags explicitly add 'copy' keyword, e.g. 'vs-cb0 = copy ResourceRWBufferCB'\n - [%ls] @ [%ls]\n", section, ini_namespace);
+				return false;
+			}
 		}
 
 		start = end + 1;
@@ -772,7 +775,7 @@ static bool ParseDrawCommand(const wchar_t *section,
 			operation->type = DrawCommandType::AUTO_VERTEX_COUNT;
 		} else {
 			operation->type = DrawCommandType::DRAW;
-			ok = ParseDrawCommandArgs(val, operation, false, 2, ini_namespace, pre_command_list->scope);
+			ok = ParseDrawCommandArgs(section, val, operation, false, 2, ini_namespace, pre_command_list->scope);
 		}
 	} else if (!wcscmp(key, L"drawauto")) {
 		operation->type = DrawCommandType::DRAW_AUTO;
@@ -781,7 +784,7 @@ static bool ParseDrawCommand(const wchar_t *section,
 			operation->type = DrawCommandType::AUTO_INDEX_COUNT;
 		} else {
 			operation->type = DrawCommandType::DRAW_INDEXED;
-			ok = ParseDrawCommandArgs(val, operation, false, 3, ini_namespace, pre_command_list->scope);
+			ok = ParseDrawCommandArgs(section, val, operation, false, 3, ini_namespace, pre_command_list->scope);
 		}
 	} else if (!wcscmp(key, L"drawindexedinstanced")) {
 		if (!wcscmp(val->c_str(), L"auto")) {
@@ -789,23 +792,23 @@ static bool ParseDrawCommand(const wchar_t *section,
 		}
 		else {
 			operation->type = DrawCommandType::DRAW_INDEXED_INSTANCED;
-			ok = ParseDrawCommandArgs(val, operation, false, 5, ini_namespace, pre_command_list->scope);
+			ok = ParseDrawCommandArgs(section, val, operation, false, 5, ini_namespace, pre_command_list->scope);
 		}
 	} else if (!wcscmp(key, L"drawinstanced")) {
 		operation->type = DrawCommandType::DRAW_INSTANCED;
-		ok = ParseDrawCommandArgs(val, operation, false, 4, ini_namespace, pre_command_list->scope);
+		ok = ParseDrawCommandArgs(section, val, operation, false, 4, ini_namespace, pre_command_list->scope);
 	} else if (!wcscmp(key, L"dispatch")) {
 		operation->type = DrawCommandType::DISPATCH;
-		ok = ParseDrawCommandArgs(val, operation, false, 3, ini_namespace, pre_command_list->scope);
+		ok = ParseDrawCommandArgs(section, val, operation, false, 3, ini_namespace, pre_command_list->scope);
 	} else if (!wcscmp(key, L"drawindexedinstancedindirect")) {
 		operation->type = DrawCommandType::DRAW_INDEXED_INSTANCED_INDIRECT;
-		ok = ParseDrawCommandArgs(val, operation, true, 1, ini_namespace, pre_command_list->scope);
+		ok = ParseDrawCommandArgs(section, val, operation, true, 1, ini_namespace, pre_command_list->scope);
 	} else if (!wcscmp(key, L"drawinstancedindirect")) {
 		operation->type = DrawCommandType::DRAW_INSTANCED_INDIRECT;
-		ok = ParseDrawCommandArgs(val, operation, true, 1, ini_namespace, pre_command_list->scope);
+		ok = ParseDrawCommandArgs(section, val, operation, true, 1, ini_namespace, pre_command_list->scope);
 	} else if (!wcscmp(key, L"dispatchindirect")) {
 		operation->type = DrawCommandType::DISPATCH_INDIRECT;
-		ok = ParseDrawCommandArgs(val, operation, true, 1, ini_namespace, pre_command_list->scope);
+		ok = ParseDrawCommandArgs(section, val, operation, true, 1, ini_namespace, pre_command_list->scope);
 	}
 
 	if (operation->type == DrawCommandType::INVALID || !ok)
@@ -4277,15 +4280,40 @@ CustomResource::~CustomResource()
 		free(initial_data);
 }
 
-void CustomResource::AddFlags(D3D11_BIND_FLAG extra_bind_flags, D3D11_RESOURCE_MISC_FLAG extra_misc_flags)
+bool CustomResource::AddFlags(D3D11_BIND_FLAG extra_bind_flags, D3D11_RESOURCE_MISC_FLAG extra_misc_flags, bool recursive)
 {
-	if (pool) {
-		pool->PropagateFlags(extra_bind_flags, extra_misc_flags);
-		return;
+	if (pool && recursive)
+		return pool->PropagateFlags(extra_bind_flags, extra_misc_flags);
+
+	misc_flags = (D3D11_RESOURCE_MISC_FLAG)(misc_flags | extra_misc_flags);
+
+	// Enforce uniqueness of D3D11_BIND_CONSTANT_BUFFER flag (it's incompatible with other flags).
+	if (extra_bind_flags & D3D11_BIND_CONSTANT_BUFFER) {
+
+		// CBs are incompatible with every other bind flags.
+		if (bind_flags && bind_flags != D3D11_BIND_CONSTANT_BUFFER) {
+			LogOverlayW(LOG_WARNING, L"Cannot add bind flag 'constant_buffer' to resource '%ls' because it has incompatible bind flags '%ls'",
+				name.c_str(), lookup_enum_bit_names(CustomResourceBindFlagNames, (CustomResourceBindFlags)bind_flags).c_str());
+			return false;
+		}
+		bind_flags = D3D11_BIND_CONSTANT_BUFFER;
+
+		// Structured/raw buffer flags are meaningless for CBs.
+		misc_flags = (D3D11_RESOURCE_MISC_FLAG)(misc_flags & ~(D3D11_RESOURCE_MISC_BUFFER_STRUCTURED | D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS));
+
+		return true;
+	}
+
+	// Don't add non-CB flags to an existing CB resource.
+	if (bind_flags & D3D11_BIND_CONSTANT_BUFFER) {
+		LogOverlayW(LOG_WARNING, L"Cannot add bind flags '%ls' to resource '%ls' because it has incompatible bind flag 'constant_buffer'",
+			lookup_enum_bit_names(CustomResourceBindFlagNames, (CustomResourceBindFlags)extra_bind_flags).c_str(), name.c_str());
+		return false;
 	}
 
 	bind_flags = (D3D11_BIND_FLAG)(bind_flags | extra_bind_flags);
-	misc_flags = (D3D11_RESOURCE_MISC_FLAG)(misc_flags | extra_misc_flags);
+
+	return true;
 }
 
 void CustomResource::Substantiate(ID3D11Device *mOrigDevice1,
@@ -4728,17 +4756,18 @@ static int is_dsv_format(DXGI_FORMAT fmt)
 	}
 }
 
-void CustomResourcePool::PropagateFlags(D3D11_BIND_FLAG bind_flags, D3D11_RESOURCE_MISC_FLAG misc_flags)
+bool CustomResourcePool::PropagateFlags(D3D11_BIND_FLAG bind_flags, D3D11_RESOURCE_MISC_FLAG misc_flags)
 {
-	resource_template->bind_flags = (D3D11_BIND_FLAG)(resource_template->bind_flags | bind_flags);
-	resource_template->misc_flags = (D3D11_RESOURCE_MISC_FLAG)(resource_template->misc_flags | misc_flags);
+	bool ret = resource_template->AddFlags(bind_flags, misc_flags, false);
 
 	for (CustomResource* resource : resources) {
 		if (resource) {
-			resource->bind_flags = (D3D11_BIND_FLAG)(resource->bind_flags | bind_flags);
-			resource->misc_flags = (D3D11_RESOURCE_MISC_FLAG)(resource->misc_flags | misc_flags);
+			if (!resource->AddFlags(bind_flags, misc_flags, false))
+				ret = false;
 		}
 	}
+
+	return ret;
 }
 
 CustomResource* CustomResourcePool::InitializeResource(int pool_index)
@@ -5574,7 +5603,10 @@ bool ParseCommandListResourceCopyDirective(const wchar_t *section,
 			(operation->options & ResourceCopyOptions::REFERENCE)) {
 		CustomResource* src_custom_resource = operation->src.GetCustomResource(true);
 		D3D11_RESOURCE_MISC_FLAG misc_flags = (D3D11_RESOURCE_MISC_FLAG)0;
-		src_custom_resource->AddFlags(operation->dst.BindFlags(NULL, &misc_flags), misc_flags);
+		if (!src_custom_resource->AddFlags(operation->dst.BindFlags(NULL, &misc_flags), misc_flags, true)) {
+			LogOverlayW(LOG_WARNING, L"To use resources with incompatible flags explicitly add 'copy' keyword, e.g. 'vs-cb0 = copy ResourceRWBufferCB'\n - [%ls] @ [%ls]\n", section, ini_namespace->c_str());
+			goto bail;
+		}
 	}
 
 	operation->ini_line = L"[" + wstring(section) + L"] " + wstring(key) + L" = " + *val;

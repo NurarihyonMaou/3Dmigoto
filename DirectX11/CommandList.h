@@ -530,7 +530,7 @@ public:
 	CustomResource();
 	~CustomResource();
 
-	void AddFlags(D3D11_BIND_FLAG extra_bind_flags, D3D11_RESOURCE_MISC_FLAG extra_misc_flags);
+	bool AddFlags(D3D11_BIND_FLAG extra_bind_flags, D3D11_RESOURCE_MISC_FLAG extra_misc_flags, bool recursive = true);
 	void Substantiate(ID3D11Device *mOrigDevice, D3D11_BIND_FLAG bind_flags, D3D11_RESOURCE_MISC_FLAG misc_flags);
 	void OverrideBufferDesc(D3D11_BUFFER_DESC *desc);
 	void OverrideTexDesc(D3D11_TEXTURE1D_DESC *desc);
@@ -578,7 +578,7 @@ public:
 	std::vector<float> fifo_index_table;        // O(1) lookup of pool_index -> uid currently occupying slot
 	size_t last_fifo_index = 0;                 // Ring pointer for FIFO eviction
 
-	void PropagateFlags(D3D11_BIND_FLAG bind_flags, D3D11_RESOURCE_MISC_FLAG misc_flags);
+	bool PropagateFlags(D3D11_BIND_FLAG bind_flags, D3D11_RESOURCE_MISC_FLAG misc_flags);
 	CustomResource* InitializeResource(int pool_index);
 	CustomResource* GetResource(float id, bool static_evaluation = false);
 };
