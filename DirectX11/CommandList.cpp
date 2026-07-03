@@ -1485,6 +1485,7 @@ static void FillInMissingInfo(ResourceCopyTargetType type, ID3D11Resource *resou
 	if (dimension == D3D11_RESOURCE_DIMENSION_BUFFER) {
 		buffer = (ID3D11Buffer*)resource;
 		buffer->GetDesc(&buf_desc);
+
 		if (*buf_size)
 			*buf_size = min(*buf_size, buf_desc.ByteWidth);
 		else
@@ -6748,7 +6749,7 @@ float ResourceCopyTarget::GetResourceSize(CommandListState* state)
 	return ret;
 }
 
-static bool IsCoersionToStructuredBufferRequired(ID3D11View *view, UINT stride,
+static bool IsConversionToStructuredBufferRequired(ID3D11View *view, UINT stride,
 		UINT offset, DXGI_FORMAT format, D3D11_BIND_FLAG bind_flags)
 {
 	// If we are copying a vertex buffer into a shader resource we need to
@@ -6846,7 +6847,7 @@ static ID3D11Buffer *RecreateCompatibleBuffer(
 			*buf_dst_size = dst_size;
 			new_desc.ByteWidth = dst_size;
 		}
-	} else if (IsCoersionToStructuredBufferRequired(src_view, stride, offset, format, bind_flags)) {
+	} else if (IsConversionToStructuredBufferRequired(src_view, stride, offset, format, bind_flags)) {
 		new_desc.MiscFlags |= D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
 		new_desc.StructureByteStride = stride;
 
@@ -7815,7 +7816,7 @@ static void ResolveMSAA(ID3D11Resource *dst_resource, ID3D11Resource *src_resour
 }
 
 static void SpecialCopyBufferRegion(ID3D11Resource *dst_resource,ID3D11Resource *src_resource,
-		CommandListState *state, UINT stride, UINT *offset,
+		CommandListState *state, UINT src_stride, UINT *src_offset,
 		UINT buf_src_size, UINT buf_dst_size)
 {
 	// We are copying a buffer for use in a constant buffer and the size of
@@ -7826,13 +7827,13 @@ static void SpecialCopyBufferRegion(ID3D11Resource *dst_resource,ID3D11Resource 
 	// We want to copy from the offset to the end of the source buffer, but
 	// cap it to the destination size to avoid "undefined behaviour". Keep
 	// in mind that this is "right", not "size":
-	src_box.left = *offset;
-	src_box.right = min(buf_src_size, *offset + buf_dst_size);
+	src_box.left = *src_offset;
+	src_box.right = min(buf_src_size, *src_offset + buf_dst_size);
 
-	if (stride) {
+	if (src_stride) {
 		// If we are copying to a structured resource, the source box
 		// must be a multiple of the stride, so round it down:
-		src_box.right = (src_box.right - src_box.left) / stride * stride + src_box.left;
+		src_box.right = (src_box.right - src_box.left) / src_stride * src_stride + src_box.left;
 	}
 
 	src_box.top = 0;
@@ -7844,7 +7845,7 @@ static void SpecialCopyBufferRegion(ID3D11Resource *dst_resource,ID3D11Resource 
 
 	// We have effectively removed the offset during the region copy, so
 	// set it to 0 to make sure nothing will try to use it again elsewhere:
-	*offset = 0;
+	*src_offset = 0;
 }
 
 static UINT get_resource_bind_flags(ID3D11Resource *resource)
