@@ -4295,7 +4295,7 @@ bool CustomResource::AddFlags(D3D11_BIND_FLAG extra_bind_flags, D3D11_RESOURCE_M
 
 		// CBs are incompatible with every other bind flags.
 		if (bind_flags && bind_flags != D3D11_BIND_CONSTANT_BUFFER) {
-			LogOverlayW(LOG_WARNING, L"Cannot add bind flag 'constant_buffer' to resource '%ls' because it has incompatible bind flags '%ls'",
+			LogOverlayW(LOG_WARNING, L"Cannot add bind flag 'constant_buffer' to resource because it has incompatible bind flags '%ls'\n - [%ls]",
 				name.c_str(), lookup_enum_bit_names(CustomResourceBindFlagNames, (CustomResourceBindFlags)bind_flags).c_str());
 			return false;
 		}
