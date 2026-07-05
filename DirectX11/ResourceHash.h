@@ -461,6 +461,8 @@ struct ResourceHashInfo
 
 typedef std::unordered_map<uint32_t, struct ResourceHashInfo> ResourceInfoMap;
 
+class CustomResource;
+
 // This is a COM object that can be attached to a resource via
 // ID3D11DeviceChild::SetPrivateDataInterface(), so that when the resource is
 // released this class will be as well, giving us a way to reliably know when a
@@ -509,7 +511,7 @@ UINT GetVertexBufferRegionOffset(UINT stride, DrawCallInfo* call_info, UINT byte
 UINT GetIndexBufferRegionOffset(DXGI_FORMAT format, DrawCallInfo* call_info, UINT byte_offset);
 UINT GetIndexBufferRegionSize(DXGI_FORMAT format, DrawCallInfo* call_info);
 UINT GetVertexBufferRegionSize(UINT stride, DrawCallInfo* call_info);
-uint32_t GetRegionHash(ID3D11DeviceContext* context, ID3D11Buffer* buffer, UINT offset, UINT size);
+uint32_t GetRegionHash(ID3D11DeviceContext* context, ID3D11Buffer* buffer, UINT offset, UINT size, CustomResource* custom_resource = nullptr);
 
 void MarkResourceHashContaminated(ID3D11Resource *dest, UINT DstSubresource,
 		ID3D11Resource *src, UINT srcSubresource, char type,

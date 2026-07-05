@@ -2037,18 +2037,6 @@ void ClearResourceRegionHashCache(ID3D11Resource* resource)
 // resource so the GPU buffer can be safely read by the CPU.
 static bool CacheBufferData(ID3D11DeviceContext* context, ID3D11Buffer* buffer, ResourceHandleInfo* handle_info)
 {
-	if (!context || !buffer || !handle_info)
-		return false;
-
-	// Fast path: reuse existing CPU snapshot.
-	// Avoids expensive GPU sync (CopyResource + Map).
-	EnterCriticalSectionPretty(&G->mCriticalSection);
-	if (handle_info->cached_data_size) {
-		LeaveCriticalSection(&G->mCriticalSection);
-		return true;
-	}
-	LeaveCriticalSection(&G->mCriticalSection);
-
 	// WARNING: Everything below may cause GPU/CPU sync and stall.
 	// This is the slow path and should be rare.
 
@@ -2154,9 +2142,10 @@ void ClearRegionHashesGlobalCache()
 
 // Returns a CRC32 hash for a specific region of the buffer.
 // The hash is cached per offset to avoid recomputing it for repeated draw calls.
-uint32_t GetRegionHash(ID3D11DeviceContext* context, ID3D11Buffer* buffer, UINT offset, UINT size)
+// When `custom_resource` is supplied, it's used instead of a `buffer` as input.
+uint32_t GetRegionHash(ID3D11DeviceContext* context, ID3D11Buffer* buffer, UINT offset, UINT size, CustomResource* custom_resource)
 {
-	if (!buffer || !size) {
+	if (!context || !buffer || !size) {
 		return 0;
 	}
 
@@ -2171,7 +2160,7 @@ uint32_t GetRegionHash(ID3D11DeviceContext* context, ID3D11Buffer* buffer, UINT 
 	EnterCriticalSectionPretty(&G->mCriticalSection);
 
 	// Acquire HandleInfo. For dozens of thousands of handles in unordered_map, usually it's more expensive than L3 cache lookup. 
-	ResourceHandleInfo* handle_info = GetResourceHandleInfo(buffer);
+	ResourceHandleInfo* handle_info = (custom_resource == nullptr) ? GetResourceHandleInfo(buffer) : custom_resource->GetHandleInfo();
 	if (!handle_info) {
 		LeaveCriticalSection(&G->mCriticalSection);
 		return 0;
@@ -2189,15 +2178,25 @@ uint32_t GetRegionHash(ID3D11DeviceContext* context, ID3D11Buffer* buffer, UINT 
 		return hash;
 	}
 
-	LeaveCriticalSection(&G->mCriticalSection);
-
-	// Ensure buffer snapshot exists in RAM (will stall GPU to fetch it from VRAM otherwise).
-	if (!CacheBufferData(context, buffer, handle_info)) {
-		return 0;
+	// Check if cached buffer snapshot exists in RAM
+	if (!handle_info->cached_data_size) {
+		LeaveCriticalSection(&G->mCriticalSection);
+		if (custom_resource == nullptr) {
+			// Stall GPU to fetch buffer data from VRAM.
+			if (!CacheBufferData(context, buffer, handle_info)) {
+				return 0;
+			}
+		} else {
+			// Region hashing of custom resources is allowed only for lightweight "views" to cached pipeline data (ref or full copies).
+			// Avoid stalling GPU for custom resources if data is not available.
+			return 0;
+		}
+		EnterCriticalSectionPretty(&G->mCriticalSection);
 	}
 
 	// Pointer to the start of the requested region within the cached buffer cannot be outside of upper bound.
 	if (offset >= handle_info->cached_data_size) {
+		LeaveCriticalSection(&G->mCriticalSection);
 		return 0;
 	}
 
@@ -2212,8 +2211,6 @@ uint32_t GetRegionHash(ID3D11DeviceContext* context, ID3D11Buffer* buffer, UINT 
 
 	// Compute CRC32 hash for the region.
 	hash = crc32c_hw(0, ptr, size);
-
-	EnterCriticalSectionPretty(&G->mCriticalSection);
 
 	// Store computed region hash in the L2 cache (local per ResourceHandleInfo).
 	handle_info->CacheRegionHash(level_2_cache_key, hash);
