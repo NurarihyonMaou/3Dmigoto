@@ -2467,6 +2467,9 @@ float CommandListOperand::process_texture_filter(CommandListState *state)
 		case ResourceCopyTargetEvaluationMode::RESOURCE_OFFSET:
 			return texture_filter_target.GetResourceOffset(state);
 			
+		case ResourceCopyTargetEvaluationMode::RESOURCE_REGION_HASH:
+			return texture_filter_target.GetResourceRegionHash(state);
+
 		case ResourceCopyTargetEvaluationMode::RESOURCE_SOURCE_STRIDE:
 		{
 			CustomResource* custom_resource = texture_filter_target.GetCustomResource();
@@ -5441,6 +5444,7 @@ IniParserResult ResourceCopyTarget::ParseTargetMember(
 		{ L"->size",          6, ResourceCopyTargetEvaluationMode::RESOURCE_SIZE,          0 },
 		{ L"->offset",        8, ResourceCopyTargetEvaluationMode::RESOURCE_OFFSET,        0 },
 		{ L"->stride",        8, ResourceCopyTargetEvaluationMode::RESOURCE_STRIDE,        0 },
+		{ L"->hashregion",   12, ResourceCopyTargetEvaluationMode::RESOURCE_REGION_HASH,   2 },
 		{ L"->sourcestride", 14, ResourceCopyTargetEvaluationMode::RESOURCE_SOURCE_STRIDE, 0 },
 	};
 
@@ -7111,6 +7115,66 @@ float ResourceCopyTarget::GetResourceOffset(CommandListState* state)
 				break;
 			}
 		}
+		resource->Release();
+	}
+
+	if (view)
+		view->Release();
+
+	return ret;
+}
+
+float ResourceCopyTarget::GetResourceRegionHash(CommandListState* state)
+{
+	ID3D11View* view = NULL;
+	UINT stride = 0, offset = 0, size = 0;
+	DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+
+	ID3D11Resource* resource = GetResource(state, &view, &stride, &offset, &format, &size);
+
+	float ret = ResourcePropertyResult::UNKNOWN;
+
+	if (!resource) {
+		ret = ResourcePropertyResult::RESOURCE_NOT_FOUND;
+	}
+	else {
+		D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+		resource->GetType(&dimension);
+
+		if (dimension != D3D11_RESOURCE_DIMENSION_BUFFER) {
+			ret = ResourcePropertyResult::NOT_A_BUFFER;
+		}
+		else {
+			auto buf = static_cast<ID3D11Buffer*>(resource);
+
+			UINT region_offset = 0;
+
+			switch (this->type) {
+			case ResourceCopyTargetType::VERTEX_BUFFER:
+				region_offset = GetVertexBufferRegionOffset(stride, state->call_info, offset);
+				break;
+
+			case ResourceCopyTargetType::INDEX_BUFFER:
+				region_offset = GetIndexBufferRegionOffset(format, state->call_info, offset);
+				break;
+
+			case ResourceCopyTargetType::CONSTANT_BUFFER:
+				region_offset = offset;
+				break;
+			}
+
+			region_offset += (UINT)member_args[0].GetValue();
+
+			UINT region_size = (UINT)member_args[1].GetValue();
+
+			uint32_t region_hash = GetRegionHash(state->mOrigContext1, buf, region_offset, region_size, GetCustomResource());
+
+			if (region_hash)
+				ret = EncodeFloat30(HashUnsigned32(region_hash));
+
+			//LogOverlay(LOG_INFO, "^- hash=%08lx offset=%d (arg0=%d) size=%d (arg1=%d)\n", region_hash, region_offset, (UINT)member_args[0].GetValue(), region_size, (UINT)member_args[1].GetValue());
+		}
+
 		resource->Release();
 	}
 

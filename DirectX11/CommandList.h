@@ -663,7 +663,7 @@ enum class ResourceCopyTargetEvaluationMode : uint16_t {
 	RESOURCE_SOURCE_STRIDE = 0b0000000000001000, // 0x0008
 	RESOURCE_SIZE          = 0b0000000000010000, // 0x0010
 	RESOURCE_OFFSET        = 0b0000000000100000, // 0x0020
-	//                       0b0000000001000000, // 0x0040
+	RESOURCE_REGION_HASH   = 0b0000000001000000, // 0x0040
 	//                       0b0000000010000000, // 0x0080
 	//                       0b0000000100000000, // 0x0100
 	//                       0b0000001000000000, // 0x0200
@@ -771,6 +771,7 @@ public:
 	float GetResourceStride(CommandListState* state);
 	float GetResourceSize(CommandListState* state);
 	float GetResourceOffset(CommandListState* state);
+	float GetResourceRegionHash(CommandListState* state);
 	D3D11_BIND_FLAG BindFlags(CommandListState *state, D3D11_RESOURCE_MISC_FLAG *misc_flags=NULL);
 };
 
