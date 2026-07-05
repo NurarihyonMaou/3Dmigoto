@@ -5967,8 +5967,8 @@ ID3D11Resource *ResourceCopyTarget::GetResource(
 		ResourceCopyTarget *dst) // Used to get bind flags when substantiating a custom resource
 {
 	HackerDevice *mHackerDevice = state->mHackerDevice;
-	ID3D11Device *mOrigDevice1 = state->mOrigDevice1;
-	ID3D11DeviceContext *mOrigContext1 = state->mOrigContext1;
+	ID3D11Device1 *mOrigDevice1 = state->mOrigDevice1;
+	ID3D11DeviceContext1 *mOrigContext1 = state->mOrigContext1;
 	ID3D11Resource *res = NULL;
 	ID3D11Buffer *buf = NULL;
 	ID3D11Buffer *so_bufs[D3D11_SO_STREAM_COUNT];
@@ -5982,33 +5982,43 @@ ID3D11Resource *ResourceCopyTarget::GetResource(
 
 	switch(type) {
 	case ResourceCopyTargetType::CONSTANT_BUFFER:
-		// FIXME: On win8 (or with evil update?), we should use
-		// Get/SetConstantBuffers1 and copy the offset into the buffer as well
-		switch(shader_type) {
+	{
+		switch (shader_type) {
 		case L'v':
-			mOrigContext1->VSGetConstantBuffers(slot, 1, &buf);
-			return buf;
+			mOrigContext1->VSGetConstantBuffers1(slot, 1, &buf, offset, buf_size);
+			break;
 		case L'h':
-			mOrigContext1->HSGetConstantBuffers(slot, 1, &buf);
-			return buf;
+			mOrigContext1->HSGetConstantBuffers1(slot, 1, &buf, offset, buf_size);
+			break;
 		case L'd':
-			mOrigContext1->DSGetConstantBuffers(slot, 1, &buf);
-			return buf;
+			mOrigContext1->DSGetConstantBuffers1(slot, 1, &buf, offset, buf_size);
+			break;
 		case L'g':
-			mOrigContext1->GSGetConstantBuffers(slot, 1, &buf);
-			return buf;
+			mOrigContext1->GSGetConstantBuffers1(slot, 1, &buf, offset, buf_size);
+			break;
 		case L'p':
-			mOrigContext1->PSGetConstantBuffers(slot, 1, &buf);
-			return buf;
+			mOrigContext1->PSGetConstantBuffers1(slot, 1, &buf, offset, buf_size);
+			break;
 		case L'c':
-			mOrigContext1->CSGetConstantBuffers(slot, 1, &buf);
-			return buf;
+			mOrigContext1->CSGetConstantBuffers1(slot, 1, &buf, offset, buf_size);
+			break;
 		default:
 			// Should not happen
 			return NULL;
 		}
-		break;
+		// Derive data offset in bytes from FirstConstant, where each constant is 16 bytes long (4 * 32-bit components).
+		// FirstConstant specifies index of the first constant of CB region that is currently visible to shaders (bound via VSSetConstantBuffers1).
+		// Runtime sets *FirstConstant (pointer!) to NULL if it is not defined in VSSetConstantBuffers(1) call used to bind CB.
+		if (offset)
+			*offset *= 16;
+		// Derive data size in bytes from NumConstants, where each constant is 16 bytes long (4 * 32-bit components).
+		// NumConstants define length of CB region in constants that is currently visible to shaders (bound via VSSetConstantBuffers1).
+		// Runtime sets *NumConstants (pointer!) to NULL if it is not defined in VSSetConstantBuffers(1) call used to bind CB.
+		if (buf_size)
+			*buf_size *= 16;
 
+		return buf;
+	}
 	case ResourceCopyTargetType::SHADER_RESOURCE:
 		switch(shader_type) {
 		case L'v':
@@ -6271,7 +6281,7 @@ void ResourceCopyTarget::SetResource(
 		DXGI_FORMAT format,
 		UINT buf_size)
 {
-	ID3D11DeviceContext *mOrigContext1 = state->mOrigContext1;
+	ID3D11DeviceContext1 *mOrigContext1 = state->mOrigContext1;
 	ID3D11Buffer *buf = NULL;
 	ID3D11Buffer *so_bufs[D3D11_SO_STREAM_COUNT];
 	ID3D11ShaderResourceView *resource_view = NULL;
@@ -6283,31 +6293,67 @@ void ResourceCopyTarget::SetResource(
 
 	switch(type) {
 	case ResourceCopyTargetType::CONSTANT_BUFFER:
-		// FIXME: On win8 (or with evil update?), we should use
-		// Get/SetConstantBuffers1 and copy the offset into the buffer as well
+
 		buf = (ID3D11Buffer*)res;
-		switch(shader_type) {
-		case L'v':
-			mOrigContext1->VSSetConstantBuffers(slot, 1, &buf);
-			return;
-		case L'h':
-			mOrigContext1->HSSetConstantBuffers(slot, 1, &buf);
-			return;
-		case L'd':
-			mOrigContext1->DSSetConstantBuffers(slot, 1, &buf);
-			return;
-		case L'g':
-			mOrigContext1->GSSetConstantBuffers(slot, 1, &buf);
-			return;
-		case L'p':
-			mOrigContext1->PSSetConstantBuffers(slot, 1, &buf);
-			return;
-		case L'c':
-			mOrigContext1->CSSetConstantBuffers(slot, 1, &buf);
-			return;
-		default:
-			// Should not happen
-			return;
+
+		if (!buf_size) {
+			if (offset > 0)
+				LogOverlayW(LOG_DIRE, L"BUG: SetResource called with offset=%d but buf_size=0 for CONSTANT_BUFFER, falling back to plugging the entire buffer\n", offset);
+			switch (shader_type) {
+				case L'v':
+					mOrigContext1->VSSetConstantBuffers(slot, 1, &buf);
+					return;
+				case L'h':
+					mOrigContext1->HSSetConstantBuffers(slot, 1, &buf);
+					return;
+				case L'd':
+					mOrigContext1->DSSetConstantBuffers(slot, 1, &buf);
+					return;
+				case L'g':
+					mOrigContext1->GSSetConstantBuffers(slot, 1, &buf);
+					return;
+				case L'p':
+					mOrigContext1->PSSetConstantBuffers(slot, 1, &buf);
+					return;
+				case L'c':
+					mOrigContext1->CSSetConstantBuffers(slot, 1, &buf);
+					return;
+			default:
+				// Should not happen
+				return;
+			}
+		} else {
+			// Derive FirstConstant from data offset in bytes, where each constant is 16 bytes long (4 * 32-bit components).
+			// FirstConstant specifies index of the first constant of CB region that is currently visible to shaders (bound via VSSetConstantBuffers1).
+			if (offset)
+				offset /= 16;
+			// Derive NumConstants from data size in bytes, where each constant is 16 bytes long (4 * 32-bit components).
+			// NumConstants define length of CB region in constants that is currently visible to shaders (bound via VSSetConstantBuffers1).
+			if (buf_size)
+				buf_size /= 16;
+			switch (shader_type) {
+				case L'v':
+					mOrigContext1->VSSetConstantBuffers1(slot, 1, &buf, &offset, &buf_size);
+					return;
+				case L'h':
+					mOrigContext1->HSSetConstantBuffers1(slot, 1, &buf, &offset, &buf_size);
+					return;
+				case L'd':
+					mOrigContext1->DSSetConstantBuffers1(slot, 1, &buf, &offset, &buf_size);
+					return;
+				case L'g':
+					mOrigContext1->GSSetConstantBuffers1(slot, 1, &buf, &offset, &buf_size);
+					return;
+				case L'p':
+					mOrigContext1->PSSetConstantBuffers1(slot, 1, &buf, &offset, &buf_size);
+					return;
+				case L'c':
+					mOrigContext1->CSSetConstantBuffers1(slot, 1, &buf, &offset, &buf_size);
+					return;
+				default:
+					// Should not happen
+					return;
+			}
 		}
 		break;
 
@@ -6932,6 +6978,7 @@ static bool IsConversionToStructuredBufferRequired(ID3D11View *view, UINT stride
 
 static ID3D11Buffer *RecreateCompatibleBuffer(
 		wstring *ini_line,
+		ResourceCopyTarget *src, // May be NULL
 		ResourceCopyTarget *dst, // May be NULL
 		ID3D11Buffer *src_resource,
 		ID3D11Buffer *dst_resource,
@@ -6943,6 +6990,7 @@ static ID3D11Buffer *RecreateCompatibleBuffer(
 		UINT stride,
 		UINT offset,
 		DXGI_FORMAT format,
+		UINT *buf_src_size,
 		UINT *buf_dst_size)
 {
 	D3D11_BUFFER_DESC new_desc;
@@ -6968,32 +7016,44 @@ static ID3D11Buffer *RecreateCompatibleBuffer(
 		new_desc.CPUAccessFlags = 0;
 	}
 
-	if (bind_flags & D3D11_BIND_CONSTANT_BUFFER) {
-		// Constant buffers have additional limitations. The size must
-		// be a multiple of 16, so round up if necessary, and it cannot
-		// be larger than 4096 x 4 component x 4 byte constants.
-		dst_size = (new_desc.ByteWidth + 15) & ~0xf;
-		dst_size = min(dst_size, D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT * 16);
+	if (bind_flags & D3D11_BIND_CONSTANT_BUFFER || (src && src->type == ResourceCopyTargetType::CONSTANT_BUFFER)) {
+		// Constant buffers created via SetConstantBuffer1 may have region size specified (derived from NumConstants).
+		// So we'll use source CB size whenever it's available, since other data is irrelevant for current shader call.
+		if (src && src->type == ResourceCopyTargetType::CONSTANT_BUFFER) {
+			if (*buf_src_size) {
+				*buf_dst_size = *buf_src_size;      // Set DST CB size to "visible region" size
+				*buf_src_size = new_desc.ByteWidth; // Set SRC CB size to its actual size
+				new_desc.ByteWidth = *buf_dst_size; // Set DST DESC size to "visible region" size
+			}
+		}
 
-		// Constant buffers cannot be structured, so clear that flag:
-		new_desc.MiscFlags &= ~D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-		// XXX: Should we clear StructureByteStride? Seems to work ok
-		// without clearing that.
+		if (bind_flags & D3D11_BIND_CONSTANT_BUFFER) {
+			// Constant buffers have additional limitations. The size must
+			// be a multiple of 16, so round up if necessary, and it cannot
+			// be larger than 4096 x 4 component x 4 byte constants.
+			dst_size = (new_desc.ByteWidth + 15) & ~0xf;
+			dst_size = min(dst_size, D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT * 16);
 
-		// If the size of the new resource doesn't match the old or
-		// there is an offset we will have to perform a region copy
-		// instead of a regular copy:
-		if (offset || dst_size != new_desc.ByteWidth) {
-			// It might be temping to take the offset into account
-			// here and make the buffer only as large as it need to
-			// be, but it's possible that the source offset might
-			// change much more often than the source buffer (just
-			// a guess), which could potentially lead us to
-			// constantly recreating the destination buffer.
+			// Constant buffers cannot be structured, so clear that flag:
+			new_desc.MiscFlags &= ~D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+			// XXX: Should we clear StructureByteStride? Seems to work ok
+			// without clearing that.
 
-			// Note down the size of the source and destination:
-			*buf_dst_size = dst_size;
-			new_desc.ByteWidth = dst_size;
+			// If the size of the new resource doesn't match the old or
+			// there is an offset we will have to perform a region copy
+			// instead of a regular copy:
+			if (offset || dst_size != new_desc.ByteWidth) {
+				// It might be temping to take the offset into account
+				// here and make the buffer only as large as it need to
+				// be, but it's possible that the source offset might
+				// change much more often than the source buffer (just
+				// a guess), which could potentially lead us to
+				// constantly recreating the destination buffer.
+
+				// Note down the size of the source and destination:
+				*buf_dst_size = dst_size;
+				new_desc.ByteWidth = dst_size;
+			}
 		}
 	} else if (IsConversionToStructuredBufferRequired(src_view, stride, offset, format, bind_flags)) {
 		new_desc.MiscFlags |= D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
@@ -7287,6 +7347,7 @@ static ResourceType* RecreateCompatibleTexture(
 
 static void RecreateCompatibleResource(
 		wstring *ini_line,
+		ResourceCopyTarget *src, // May be NULL
 		ResourceCopyTarget *dst, // May be NULL
 		ID3D11Resource *src_resource,
 		ID3D11Resource **dst_resource,
@@ -7298,6 +7359,7 @@ static void RecreateCompatibleResource(
 		UINT stride,
 		UINT offset,
 		DXGI_FORMAT format,
+		UINT *buf_src_size,
 		UINT *buf_dst_size)
 {
 	D3D11_RESOURCE_DIMENSION src_dimension;
@@ -7314,8 +7376,8 @@ static void RecreateCompatibleResource(
 	src_resource->GetType(&src_dimension);
 	switch (src_dimension) {
 		case D3D11_RESOURCE_DIMENSION_BUFFER:
-			res = RecreateCompatibleBuffer(ini_line, dst, (ID3D11Buffer*)src_resource, (ID3D11Buffer*)*dst_resource,
-				resource_pool, src_view, bind_flags, misc_flags, state, stride, offset, format, buf_dst_size);
+			res = RecreateCompatibleBuffer(ini_line, src, dst, (ID3D11Buffer*)src_resource, (ID3D11Buffer*)*dst_resource,
+				resource_pool, src_view, bind_flags, misc_flags, state, stride, offset, format, buf_src_size, buf_dst_size);
 			break;
 		case D3D11_RESOURCE_DIMENSION_TEXTURE1D:
 			res = RecreateCompatibleTexture<ID3D11Texture1D, D3D11_TEXTURE1D_DESC, &ID3D11Device::CreateTexture1D>
@@ -8292,10 +8354,8 @@ void ResourceCopyOperation::run(CommandListState *state)
 	FillInMissingInfo(src.type, src_resource, src_view, &stride, &offset, &buf_src_size, &format);
 
 	if (options & ResourceCopyOptions::COPY_MASK) {
-		RecreateCompatibleResource(&ini_line, &dst, src_resource,
-			pp_cached_resource, p_resource_pool, src_view, pp_cached_view,
-			state,
-			options, stride, offset, format, &buf_dst_size);
+		RecreateCompatibleResource(&ini_line, &src, &dst, src_resource, pp_cached_resource, p_resource_pool, src_view, pp_cached_view,
+			state, options, stride, offset, format, &buf_src_size, &buf_dst_size);
 
 		if (!*pp_cached_resource) {
 			COMMAND_LIST_LOG(state, "  error creating/updating destination resource\n");
@@ -8314,13 +8374,13 @@ void ResourceCopyOperation::run(CommandListState *state)
 			Profiling::msaa_resolutions++;
 			ResolveMSAA(dst_resource, src_resource, state);
 		} else if (buf_dst_size) {
-			COMMAND_LIST_LOG(state, "  performing region copy\n");
+			COMMAND_LIST_LOG(state, "  performing region copy (src_stride=%d src_offset=%d src_size=%d dst_size=%d)\n", stride, offset, buf_src_size, buf_dst_size);
 			Profiling::buffer_region_copies++;
 			SpecialCopyBufferRegion(dst_resource, src_resource,
 					state, stride, &offset,
 					buf_src_size, buf_dst_size);
 		} else {
-			COMMAND_LIST_LOG(state, "  performing full copy\n");
+			COMMAND_LIST_LOG(state, "  performing full copy (src_stride=%d src_offset=%d src_size=%d dst_size=%d)\n", stride, offset, buf_src_size, buf_dst_size);
 			Profiling::resource_full_copies++;
 			mOrigContext1->CopyResource(dst_resource, src_resource);
 		}
@@ -8352,6 +8412,14 @@ void ResourceCopyOperation::run(CommandListState *state)
 		// Not checking for NULL return as view's are not applicable to
 		// all types. Legitimate failures are logged.
 		*pp_cached_view = dst_view;
+	}
+
+	// SetResource now supports branching to SetConstantBuffers1 when offset and buf_dst_size are specified.
+	// For now we'll keep using SetConstantBuffers to expose the entire CB.
+	// TODO: Research for potential benefits of using shared temp resource for multiple CONSTANT_BUFFERs.
+	if (dst.type == ResourceCopyTargetType::CONSTANT_BUFFER) {
+		offset = 0;
+		buf_dst_size = 0;
 	}
 
 	dst.SetResource(state, dst_resource, dst_view, stride, offset, format, buf_dst_size);
