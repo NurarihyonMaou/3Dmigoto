@@ -1823,11 +1823,17 @@ bool FuzzyMatchResourceDescLess::operator() (const std::shared_ptr<FuzzyMatchRes
 // NOTE: Pages do NOT store hashes; they only invalidate offset-based entries.
 void RegionHashesCache::Initialize(size_t buffer_size)
 {
-	//LogInfo("RegionHashesCache::Initialize buffer_size=%d \n", buffer_size);
-	UINT num_pages = (UINT)((buffer_size + PAGE_SIZE - 1) / PAGE_SIZE);
-	page_versions.assign(num_pages, 0);
-	if (cache)
-		cache->clear();
+	if (data_size != buffer_size) {
+		//LogInfo("RegionHashesCache::Initialize buffer_size=%d \n", buffer_size);
+		UINT num_pages = (UINT)((buffer_size + PAGE_SIZE - 1) / PAGE_SIZE);
+		page_versions.assign(num_pages, 0);
+		if (cache)
+			cache->clear();
+	}
+	else
+	{
+		Clear();
+	}
 }
 
 // Store hash together with the current page version.
@@ -1917,71 +1923,67 @@ void RegionHashesCache::Clear()
 // This buffer allows hashing without repeated GPU Map() calls.
 void ResourceHandleInfo::InitializeDataCache(size_t size)
 {
+	//LogInfo("InitializeDataCache size=%d\n", size);
+	cached_data.reset();
+	cached_data_size = size;
+
 	// Initialize region hashes cache.
 	if (!region_hashes_cache)
 		region_hashes_cache = std::make_unique<RegionHashesCache>();
-	//LogInfo("InitializeDataCache size=%d\n", size);
-	if (!cached_data_size) {
-		// First-time initialization.
-		cached_data_size = size;
-		// Initialize region cache for this buffer size.
-		region_hashes_cache->Initialize(size);
-	} else {
-		// Buffer reused: invalidate all region hashes.
-		region_hashes_cache->Clear();
-	}
+	// Initialize region cache for this buffer size.
+	region_hashes_cache->Initialize(size);
 }
 
-void ResourceHandleInfo::WriteDataCache(const void* src, size_t size)
+void ResourceHandleInfo::SetDataCache(void* src, size_t size)
 {
 	if (!src)
 		return;
 
 	InitializeDataCache(size);
 
-	if (cached_data) {
-		free(cached_data);
-		cached_data = nullptr;
-	}
+	// Adopt memory pointer as shared_ptr, no re-allocation involved.
+	cached_data = std::shared_ptr<uint8_t[]>(static_cast<uint8_t*>(src), free);
 
-	// Full overwrite of CPU snapshot.
-	cached_data = (uint8_t*)src;
-
-	//cached_data_hash = crc32c_hw(0, cached_data, size);
-	//LogInfo("WriteDataCache size=%d, data_hash=%08lx\n", size, cached_data_hash);
+	//cached_data_hash = crc32c_hw(0, GetCachedData(), size);
+	//LogInfo("SetDataCache size=%d, data_hash=%08lx\n", size, cached_data_hash);
 }
 
-void ResourceHandleInfo::WriteDataCacheRegion(const void* src, size_t region_size, UINT offset)
+void ResourceHandleInfo::SetDataCacheRegion(const void* src, size_t region_size, UINT offset)
 {
 	if (!src || !region_size)
 		return;
 
 	// Cannot write partial region if cache not initialized.
 	if (!cached_data_size) {
-		LogInfo("WriteDataCacheRegion Failed (not initialized): offset=%d, region_size=%d!\n", offset, region_size);
+		LogInfo("SetDataCacheRegion Failed (not initialized): offset=%d, region_size=%d!\n", offset, region_size);
 		return;
 	}
 
 	if (offset > cached_data_size || region_size > cached_data_size - offset){
-		LogInfo("WriteDataCacheRegion Failed (out of bounds): offset=%d, region_size=%d, dst_size=%d!\n", offset, region_size, cached_data_size);
+		LogInfo("SetDataCacheRegion Failed (out of bounds): offset=%d, region_size=%d, dst_size=%d!\n", offset, region_size, cached_data_size);
 		return;
 	}
 
-	//LogInfo("WriteDataCacheRegion: offset=%d, region_size=%d!\n", offset, region_size);
+	//LogInfo("SetDataCacheRegion: offset=%d, region_size=%d!\n", offset, region_size);
 
-	if (!cached_data)
-		cached_data = (uint8_t*)malloc(cached_data_size);
-
-	if (cached_data) {
-	// Update only the affected region.
-		memcpy(cached_data + offset, src, region_size);
+	// Recreate cache if it was invalidated but size is still known.
+	if (!cached_data) {
+		cached_data = std::shared_ptr<uint8_t[]>(new uint8_t[cached_data_size]);
+		cached_data_offset = 0;
 	}
+		
+	// Update only the affected region.
+	memcpy(GetCachedData() + offset, src, region_size);
 
 	// Invalidate only affected pages (cheap, avoids clearing the whole cache).
 	if (region_hashes_cache)
 		region_hashes_cache->Invalidate(offset, offset + (UINT)region_size);
 
 	//cached_data_hash = crc32c_hw(0, cached_data, cached_data_size);
+}
+
+uint8_t* ResourceHandleInfo::GetCachedData() {
+	return cached_data.get() + cached_data_offset;
 }
 
 // Clears all cached region hashes and invalidates the CPU-side buffer snapshot.
@@ -1993,10 +1995,8 @@ void ResourceHandleInfo::ClearDataCache()
 
 	//LogInfo("ResourceHandleInfo::ClearDataCache\n");
 
-	if (cached_data) {
-		free(cached_data);
-		cached_data = nullptr;
-	}
+	cached_data.reset();
+	cached_data_offset = 0;
 	cached_data_size = 0;
 
 	// Drop all cached hashes and CPU snapshot.
@@ -2093,7 +2093,7 @@ static bool CacheBufferData(ID3D11DeviceContext* context, ID3D11Buffer* buffer, 
 	// Store a CPU copy of the entire buffer so region hashes can be
 	// computed without re-mapping the resource multiple times.
 	EnterCriticalSectionPretty(&G->mCriticalSection);
-	handle_info->WriteDataCache(mapped.pData, desc.ByteWidth);
+	handle_info->SetDataCache(mapped.pData, desc.ByteWidth);
 	LeaveCriticalSection(&G->mCriticalSection);
 
 	context->Unmap(staging, 0);
@@ -2207,7 +2207,7 @@ uint32_t GetRegionHash(ID3D11DeviceContext* context, ID3D11Buffer* buffer, UINT 
 	}
 
 	// Make pointer for given offset in L1 cache (raw data).
-	const uint8_t* ptr = handle_info->cached_data + offset;
+	const uint8_t* ptr = handle_info->GetCachedData() + offset;
 
 	// Compute CRC32 hash for the region.
 	hash = crc32c_hw(0, ptr, size);

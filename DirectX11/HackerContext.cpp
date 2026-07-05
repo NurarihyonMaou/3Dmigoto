@@ -1354,7 +1354,7 @@ out_profile:
 		Profiling::end(&profiling_state, &Profiling::map_overhead);
 }
 
-void UpdateResourceDataCacheFromMap(ID3D11Resource* pResource, const void* data, size_t size, bool* deallocate_diverted_memory)
+void UpdateResourceDataCacheFromMap(ID3D11Resource* pResource, void* data, size_t size, bool* deallocate_diverted_memory)
 {
 	if (!data || !size)
 		return;
@@ -1369,7 +1369,7 @@ void UpdateResourceDataCacheFromMap(ID3D11Resource* pResource, const void* data,
 	}
 
 	//LogInfo("UpdateResourceDataCacheFromMap size=%d, pResource=%p\n", size, pResource);
-	info->WriteDataCache(data, size);
+	info->SetDataCache(data, size);
 
 	if (deallocate_diverted_memory)
 		*deallocate_diverted_memory = false;
@@ -1856,7 +1856,7 @@ void CopySubresourceRegionCache(ID3D11Resource* pSrcResource, ID3D11Resource* pD
 		dst_info->InitializeDataCache(dst_desc.ByteWidth);
 	}
 
-	dst_info->WriteDataCacheRegion(src_info->cached_data + src_offset, region_size, DstX);
+	dst_info->SetDataCacheRegion(src_info->GetCachedData() + src_offset, region_size, DstX);
 
 	//dst_info->cached_data_hash = crc32c_hw(0, dst_info->cached_data, dst_desc.ByteWidth);
 
