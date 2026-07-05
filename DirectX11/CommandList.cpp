@@ -6797,14 +6797,22 @@ namespace ResourcePropertyResult {
 
 float ResourceCopyTarget::GetResourceStride(CommandListState* state)
 {
-	if (type == ResourceCopyTargetType::CUSTOM_RESOURCE) {
-		if (auto custom_resource = GetCustomResource()) {
-			if (custom_resource->override_stride != -1)
-				return (float)custom_resource->override_stride;
+	switch (type) {
+		case ResourceCopyTargetType::CUSTOM_RESOURCE: 
+		{
+			if (auto custom_resource = GetCustomResource()) {
+				if (custom_resource->override_stride != -1)
+					return (float)custom_resource->override_stride;
 
-			if (custom_resource->override_format != (DXGI_FORMAT)-1 &&
-				custom_resource->override_format != DXGI_FORMAT_UNKNOWN)
+				if (custom_resource->override_format != (DXGI_FORMAT)-1 &&
+					custom_resource->override_format != DXGI_FORMAT_UNKNOWN)
 					return (float)dxgi_format_size(custom_resource->override_format);
+			}
+		}
+		case ResourceCopyTargetType::CONSTANT_BUFFER:
+		{
+			// Constant Buffers have fixed stride of 16 bytes (4 x 32-bit values).
+			return 16.0f;
 		}
 	}
 
