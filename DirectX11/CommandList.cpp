@@ -3227,9 +3227,16 @@ next_token:
 		//   doesn't work if custom resources are checked. If we need
 		//   to match these for some other reason, we could add \ and .
 		//   to this list, which will cover most namespaced resources.
-		pos = remain.find_first_not_of(L"@#abcdefghijklmnopqrstuvwxyz_-0123456789[$.]>");
+		pos = remain.find_first_not_of(L"@#abcdefghijklmnopqrstuvwxyz_-0123456789[$.]>()");
 		if (pos) {
 			token = remain.substr(0, pos);
+			// If token contains '(', look for ')' to include whitespaces
+			if (token.find(L'(') != std::wstring::npos)
+			{
+				size_t end = remain.find(L')', 0);
+				token = remain.substr(0, end + 1);
+				pos = end + 1;
+			}
 			ret = texture_filter_target.ParseTarget(token.c_str(), true, ini_namespace, scope);
 			if (ret) {
 				operand = make_shared<CommandListOperand>(friendly_pos, token);
@@ -5305,6 +5312,106 @@ IniParserResult ResourceCopyTarget::ParseTargetPrefix(const wchar_t*& target, si
 	return IniParserResult::TOKEN_NOT_FOUND;
 }
 
+bool ResourceCopyTarget::ParseMemberArgument(const std::wstring& text, const std::wstring* ini_namespace, CommandListScope* scope, MemberArg& arg)
+{
+	if (text.empty())
+		return false;
+
+	if (text[0] == L'$')
+	{
+		// Parse DYNAMIC attr ($id)
+		CommandListVariable* var = nullptr;
+
+		// Try parsing var_name as a variable:
+		if (find_local_variable(text, scope, &var) || parse_command_list_var_name(text, ini_namespace, &var)) {
+			arg.var = var;
+			return true;
+		}
+
+		return false;
+	}
+	else
+	{
+		// Parse STATIC attr (0)
+		wchar_t* end = nullptr;
+		float value = wcstof(text.c_str(), &end);
+
+		// Try parsing var_name as a float
+		if (*end != L'\0')
+			return false;
+
+		arg.constant = value;
+	}
+
+	return true;
+}
+
+bool ResourceCopyTarget::GetNextArgument(const wchar_t*& arg_start, const wchar_t* args_end, std::wstring& text)
+{
+	if (arg_start >= args_end)
+		return false;
+
+	const wchar_t* arg_end = wcschr(arg_start, L',');
+
+	// Ensure staying within `(arg_start ... args_end)` bounds
+	if (!arg_end || arg_end > args_end)
+		arg_end = args_end;
+
+	// Trim left
+	while (arg_start < arg_end && iswspace(*arg_start))
+		++arg_start;
+
+	const wchar_t* real_end = arg_end;
+
+	// Trim right
+	while (real_end > arg_start && iswspace(real_end[-1]))
+		--real_end;
+
+	text.assign(arg_start, real_end);
+
+	arg_start = (arg_end < args_end) ? arg_end + 1 : args_end;
+
+	return true;
+}
+
+IniParserResult ResourceCopyTarget::ParseTargetMemberArguments(
+	const wchar_t*& target, size_t& length, const std::wstring* ini_namespace, CommandListScope* scope, size_t& num_args
+)
+{
+	if (length == 0 || target[length - 1] != L')' || !(evaluation_mode & ResourceCopyTargetEvaluationMode::RESOURCE_MASK)) {
+		return IniParserResult::TOKEN_NOT_FOUND;
+	}
+
+	const wchar_t* args_open_pos = wcsrchr(target, L'(');
+
+	if (!args_open_pos || args_open_pos <= target)
+		return IniParserResult::SYNTAX_ERROR; // Invalid syntax (opening `(` not found or located after closing `)`)
+
+	const wchar_t* args_end = target + length - 1;
+
+	// Remove "(...)" from target
+	length = args_open_pos - target;
+
+	const wchar_t* arg_start = args_open_pos + 1;
+
+	for (size_t i = 0; i < MAX_MEMBER_ARGS_COUNT; ++i)
+	{
+		std::wstring text;
+
+		if (!GetNextArgument(arg_start, args_end, text))
+			break;
+
+		if (text.empty())
+			break;
+
+		if (!ParseMemberArgument(text, ini_namespace, scope, member_args[i]))
+			return IniParserResult::SYNTAX_ERROR;
+
+		++num_args;
+	}
+
+	return IniParserResult::TOKEN_FOUND;
+}
 
 bool suffix_equals(const wchar_t* str, size_t len, const wchar_t* suffix, size_t suffix_len)
 {
@@ -5339,6 +5446,8 @@ IniParserResult ResourceCopyTarget::ParseTargetMember(
 
 	// Consume arguments (adjust `length` accordingly). Ensure syntax error passthrough.
 	size_t num_args = 0;
+	if (ParseTargetMemberArguments(target, length, ini_namespace, scope, num_args) == IniParserResult::SYNTAX_ERROR)
+		return IniParserResult::SYNTAX_ERROR;
 
 	// Consume member keyword (adjust `target` and `length` accordingly).
 	for (const auto& member : members) {

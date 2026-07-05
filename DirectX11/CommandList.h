@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <array>
 #include <unordered_map>
 #include <unordered_set>
 #include <forward_list>
@@ -681,7 +682,36 @@ enum class ResourceCopyTargetEvaluationMode : uint16_t {
 };
 SENSIBLE_ENUM(ResourceCopyTargetEvaluationMode);
 
+
+struct MemberArg
+{
+	float constant = 0.0f;
+	CommandListVariable* var = nullptr;
+
+	MemberArg(float constant) :
+		constant(constant)
+	{}
+	MemberArg(CommandListVariable* var) :
+		var(var)
+	{}
+	MemberArg()
+	{}
+
+	bool IsVariable() const { return var != nullptr; }
+
+	float GetValue() const {
+		return var ? var->fval : constant;
+	}
+};
+
+enum class IniParserResult : uint8_t {
+	TOKEN_NOT_FOUND = 0,
+	TOKEN_FOUND = 1,
+	SYNTAX_ERROR = 2,
+};
+
 class ResourceCopyTarget {
+	static constexpr size_t MAX_MEMBER_ARGS_COUNT = 2;
 private:
 	CustomResource* _custom_resource;  // Read access should go via GetCustomResource
 public:
@@ -691,6 +721,9 @@ public:
 	unsigned slot;
 	CustomResourcePool *custom_resource_pool;
 	CommandListVariable* custom_resource_pool_index_var;
+
+	std::array<MemberArg, MAX_MEMBER_ARGS_COUNT> member_args;
+
 	bool forbid_view_cache;
 
 	ResourceCopyTarget() :
@@ -701,10 +734,14 @@ public:
 		_custom_resource(NULL),
 		custom_resource_pool(NULL),
 		custom_resource_pool_index_var(NULL),
+		member_args{},
 		forbid_view_cache(false)
 	{}
 
 	IniParserResult ParseTargetPrefix(const wchar_t*& target, size_t& length);
+	bool ResourceCopyTarget::GetNextArgument(const wchar_t*& arg_start, const wchar_t* args_end, std::wstring& text);
+	bool ResourceCopyTarget::ParseMemberArgument(const std::wstring& text, const std::wstring* ini_namespace, CommandListScope* scope, MemberArg& arg);
+	IniParserResult ParseTargetMemberArguments(const wchar_t*& target, size_t& length, const wstring* ini_namespace, CommandListScope* scope, size_t& num_args);
 	IniParserResult ParseTargetMember(const wchar_t*& target, size_t& length, wstring& temp_target, const wstring* ini_namespace, CommandListScope* scope);
 	IniParserResult ParseTargetPipelineSlot(const wchar_t*& target, size_t length, bool is_source);
 	IniParserResult ParseTargetCustomResource(const wchar_t*& target, size_t length, const wstring* ini_namespace, CommandListScope* scope);
