@@ -2464,6 +2464,9 @@ float CommandListOperand::process_texture_filter(CommandListState *state)
 		case ResourceCopyTargetEvaluationMode::RESOURCE_SIZE:
 			return texture_filter_target.GetResourceSize(state);
 
+		case ResourceCopyTargetEvaluationMode::RESOURCE_OFFSET:
+			return texture_filter_target.GetResourceOffset(state);
+			
 		case ResourceCopyTargetEvaluationMode::RESOURCE_SOURCE_STRIDE:
 		{
 			CustomResource* custom_resource = texture_filter_target.GetCustomResource();
@@ -5269,6 +5272,7 @@ IniParserResult ResourceCopyTarget::ParseTargetMember(
 
 	static constexpr MemberInfo members[] = {
 		{ L"->size",          6, ResourceCopyTargetEvaluationMode::RESOURCE_SIZE,          0 },
+		{ L"->offset",        8, ResourceCopyTargetEvaluationMode::RESOURCE_OFFSET,        0 },
 		{ L"->stride",        8, ResourceCopyTargetEvaluationMode::RESOURCE_STRIDE,        0 },
 		{ L"->sourcestride", 14, ResourceCopyTargetEvaluationMode::RESOURCE_SOURCE_STRIDE, 0 },
 	};
@@ -6836,6 +6840,54 @@ float ResourceCopyTarget::GetResourceSize(CommandListState* state)
 			}
 		}
 
+		resource->Release();
+	}
+
+	if (view)
+		view->Release();
+
+	return ret;
+}
+
+float ResourceCopyTarget::GetResourceOffset(CommandListState* state)
+{
+
+	ID3D11View* view = NULL;
+	UINT stride = 0, offset = 0;
+	DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+
+	ID3D11Resource* resource = GetResource(state, &view, &stride, &offset, &format, NULL);
+
+	float ret = ResourcePropertyResult::UNKNOWN;
+
+	if (!resource) {
+		ret = ResourcePropertyResult::RESOURCE_NOT_FOUND;
+	}
+	else {
+
+		D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+		resource->GetType(&dimension);
+
+		if (dimension != D3D11_RESOURCE_DIMENSION_BUFFER) {
+			ret = ResourcePropertyResult::NOT_A_BUFFER;
+		}
+		else {
+			auto buf = static_cast<ID3D11Buffer*>(resource);
+
+			switch (this->type) {
+			case ResourceCopyTargetType::VERTEX_BUFFER:
+				ret = (float)GetVertexBufferRegionOffset(stride, state->call_info, offset);
+				break;
+
+			case ResourceCopyTargetType::INDEX_BUFFER:
+				ret = (float)GetIndexBufferRegionOffset(format, state->call_info, offset);
+				break;
+
+			case ResourceCopyTargetType::CONSTANT_BUFFER:
+				ret = (float)offset;
+				break;
+			}
+		}
 		resource->Release();
 	}
 

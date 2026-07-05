@@ -657,7 +657,7 @@ enum class ResourceCopyTargetEvaluationMode : uint16_t {
 	RESOURCE_STRIDE        = 0b0000000000000100, // 0x0004
 	RESOURCE_SOURCE_STRIDE = 0b0000000000001000, // 0x0008
 	RESOURCE_SIZE          = 0b0000000000010000, // 0x0010
-	//                       0b0000000000100000, // 0x0020
+	RESOURCE_OFFSET        = 0b0000000000100000, // 0x0020
 	//                       0b0000000001000000, // 0x0040
 	//                       0b0000000010000000, // 0x0080
 	//                       0b0000000100000000, // 0x0100
@@ -729,6 +729,7 @@ public:
 	float GetPoolId();
 	float GetResourceStride(CommandListState* state);
 	float GetResourceSize(CommandListState* state);
+	float GetResourceOffset(CommandListState* state);
 	D3D11_BIND_FLAG BindFlags(CommandListState *state, D3D11_RESOURCE_MISC_FLAG *misc_flags=NULL);
 };
 
