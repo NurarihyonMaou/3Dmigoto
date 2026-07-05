@@ -1227,7 +1227,7 @@ bool HackerContext::MapTrackRegionHashes(ID3D11Resource* pResource, D3D11_MAP Ma
 	ID3D11Buffer* buf = (ID3D11Buffer*)pResource;
 	D3D11_BUFFER_DESC buf_desc;
 	buf->GetDesc(&buf_desc);
-	if (buf_desc.BindFlags & (D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_INDEX_BUFFER)) {
+	if (buf_desc.BindFlags & (D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_INDEX_BUFFER | D3D11_BIND_CONSTANT_BUFFER)) {
 		return true;
 	}
 	return false;
@@ -1368,6 +1368,7 @@ void UpdateResourceDataCacheFromMap(ID3D11Resource* pResource, const void* data,
 		return;
 	}
 
+	//LogInfo("UpdateResourceDataCacheFromMap size=%d, pResource=%p\n", size, pResource);
 	info->WriteDataCache(data, size);
 
 	if (deallocate_diverted_memory)
@@ -1397,7 +1398,7 @@ void HackerContext::TrackAndDivertUnmap(ID3D11Resource *pResource, UINT Subresou
 
 	bool deallocate_diverted_memory = true;
 
-	if (G->track_region_hashes && map_info->bind_flags & (D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_INDEX_BUFFER))
+	if (G->track_region_hashes && map_info->bind_flags & (D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_INDEX_BUFFER | D3D11_BIND_CONSTANT_BUFFER))
 		UpdateResourceDataCacheFromMap(pResource, map_info->map.pData, map_info->size, &deallocate_diverted_memory);
 
 	if (G->track_texture_updates == 1 && Subresource == 0 && map_info->mapped_writable)
