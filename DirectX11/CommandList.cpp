@@ -4319,6 +4319,61 @@ bool CustomResource::AddFlags(D3D11_BIND_FLAG extra_bind_flags, D3D11_RESOURCE_M
 	return true;
 }
 
+// Takes ownership of data. Must be allocated with malloc() and must not be freed by the caller.
+void CustomResource::InitializeHandleInfo(void* data, size_t data_size)
+{
+	if (!data || !data_size)
+		return;
+
+	if (!handle_info)
+		handle_info = std::make_unique<ResourceHandleInfo>();
+
+	handle_info->SetDataCache(data, data_size);
+}
+
+// Creates a view into cached CPU-side data of another resource.
+// Shares ownership of the underlying buffer (no copying), only offset/size metadata changes.
+// Enables GetRegionHash() on subregions of GPU-copy-like resources with minimal overhead.
+void CustomResource::SetHandleInfo(ID3D11Resource* source, size_t offset, size_t data_size)
+{
+	if (!source)
+		return;
+
+	EnterCriticalSectionPretty(&G->mCriticalSection);
+
+	ResourceHandleInfo* src_handle_info = GetResourceHandleInfo(source);
+
+	if (!src_handle_info || !src_handle_info->cached_data || !src_handle_info->cached_data_size) {
+		LeaveCriticalSection(&G->mCriticalSection);
+		return;
+	}
+
+	if (!handle_info)
+		handle_info = std::make_unique<ResourceHandleInfo>();
+
+	// Drop any previously owned/shared buffer before binding new view.
+	// This line is not needed, but lets keep the intent clear.
+	handle_info->cached_data.reset();
+
+	// Share ownership of the cached buffer to ensure it remains alive independently of the source.
+	handle_info->cached_data = src_handle_info->cached_data;
+
+	// Store view metadata (offset and size) relative to the shared cache.
+	handle_info->cached_data_offset = src_handle_info->cached_data_offset + offset;
+	handle_info->cached_data_size = data_size ? data_size : src_handle_info->cached_data_size;
+
+	LeaveCriticalSection(&G->mCriticalSection);
+}
+
+ResourceHandleInfo* CustomResource::GetHandleInfo()
+{
+	if (!handle_info || !handle_info->cached_data || !handle_info->cached_data_size) {
+		return nullptr;
+	}
+
+	return handle_info.get();
+}
+
 void CustomResource::Substantiate(ID3D11Device *mOrigDevice1,
 		D3D11_BIND_FLAG bind_flags, D3D11_RESOURCE_MISC_FLAG misc_flags)
 {
@@ -4411,7 +4466,12 @@ void CustomResource::LoadBufferFromFile(ID3D11Device *mOrigDevice1)
 
 	buf_size = (UINT)size;
 
+	// TODO: Research for possible usefulness of RAM caching of loaded files.
+	//if(G->track_region_hashes)
+	//	InitializeHandleInfo(buf, buf_size);
+
 out_delete:
+	//if (!G->track_region_hashes)
 	free(buf);
 out_close:
 	CloseHandle(f);
@@ -8325,13 +8385,14 @@ void ResourceCopyOperation::run(CommandListState *state)
 		return;
 	}
 
+	CustomResource* dst_custom_resource = nullptr;
 	if (dst.type == ResourceCopyTargetType::CUSTOM_RESOURCE) {
 		// If we're copying to a custom resource, use the resource &
 		// view in the CustomResource directly as the cache instead of
 		// the cache in the ResourceCopyOperation. This will reduce the
 		// number of extra resources we have floating around if copying
 		// something to a single custom resource from multiple shaders.
-		CustomResource* dst_custom_resource = dst.GetCustomResource();
+		dst_custom_resource = dst.GetCustomResource();
 
 		pp_cached_resource = &dst_custom_resource->resource;
 		pp_cached_device = &dst_custom_resource->device;
@@ -8384,17 +8445,23 @@ void ResourceCopyOperation::run(CommandListState *state)
 		} else if (buf_dst_size) {
 			COMMAND_LIST_LOG(state, "  performing region copy (src_stride=%d src_offset=%d src_size=%d dst_size=%d)\n", stride, offset, buf_src_size, buf_dst_size);
 			Profiling::buffer_region_copies++;
+			if (G->track_region_hashes && dst_custom_resource)
+				dst_custom_resource->SetHandleInfo(src_resource, offset, buf_dst_size);
 			SpecialCopyBufferRegion(dst_resource, src_resource,
 					state, stride, &offset,
 					buf_src_size, buf_dst_size);
 		} else {
 			COMMAND_LIST_LOG(state, "  performing full copy (src_stride=%d src_offset=%d src_size=%d dst_size=%d)\n", stride, offset, buf_src_size, buf_dst_size);
 			Profiling::resource_full_copies++;
+			if (G->track_region_hashes && dst_custom_resource)
+				dst_custom_resource->SetHandleInfo(src_resource, 0, buf_dst_size);
 			mOrigContext1->CopyResource(dst_resource, src_resource);
 		}
 	} else {
 		COMMAND_LIST_LOG(state, "  copying by reference\n");
 		Profiling::resource_reference_copies++;
+		if (G->track_region_hashes && dst_custom_resource)
+			dst_custom_resource->SetHandleInfo(src_resource, offset, buf_src_size);
 		dst_resource = src_resource;
 		if (src_view && (EquivTarget(src.type) == EquivTarget(dst.type))) {
 			dst_view = src_view;

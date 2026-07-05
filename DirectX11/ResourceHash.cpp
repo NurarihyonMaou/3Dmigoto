@@ -1925,6 +1925,7 @@ void ResourceHandleInfo::InitializeDataCache(size_t size)
 {
 	//LogInfo("InitializeDataCache size=%d\n", size);
 	cached_data.reset();
+	cached_data_offset = 0;
 	cached_data_size = size;
 
 	// Initialize region hashes cache.

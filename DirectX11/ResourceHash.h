@@ -321,6 +321,7 @@ struct ResourceHandleInfo
 	// Used to compute hashes for arbitrary regions without re-mapping
 	// the GPU resource multiple times.
 	std::shared_ptr<uint8_t[]> cached_data;
+	size_t cached_data_offset = 0;
 	size_t cached_data_size = 0;
 	//uint32_t cached_data_hash = 0;
 

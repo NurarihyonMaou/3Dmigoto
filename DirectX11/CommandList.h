@@ -480,6 +480,7 @@ public:
 	wstring name;
 
 	ID3D11Resource *resource;
+	std::unique_ptr<ResourceHandleInfo> handle_info;
 	ResourcePool resource_pool;
 	ID3D11Device *device;
 	ID3D11View *view;
@@ -531,6 +532,9 @@ public:
 	~CustomResource();
 
 	bool AddFlags(D3D11_BIND_FLAG extra_bind_flags, D3D11_RESOURCE_MISC_FLAG extra_misc_flags, bool recursive = true);
+	void InitializeHandleInfo(void* data, size_t data_size);
+	void SetHandleInfo(ID3D11Resource* source, size_t offset, size_t data_size);
+	ResourceHandleInfo* GetHandleInfo();
 	void Substantiate(ID3D11Device *mOrigDevice, D3D11_BIND_FLAG bind_flags, D3D11_RESOURCE_MISC_FLAG misc_flags);
 	void OverrideBufferDesc(D3D11_BUFFER_DESC *desc);
 	void OverrideTexDesc(D3D11_TEXTURE1D_DESC *desc);
