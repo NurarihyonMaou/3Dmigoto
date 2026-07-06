@@ -4522,6 +4522,9 @@ void CustomResource::LoadFromFile(ID3D11Device *mOrigDevice1)
 	// could do something smart here, like only using it if the
 	// bind_flags indicate it will be used as a shader resource.
 
+	// Needs to be called at some point before CreateXXXTextureFromFile:
+	CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+
 	ext = filename.substr(filename.rfind(L"."));
 	if (!_wcsicmp(ext.c_str(), L".dds")) {
 		LogInfoW(L"Loading custom resource %s as DDS, bind_flags=0x%03x\n", filename.c_str(), bind_flags);
@@ -4534,7 +4537,7 @@ void CustomResource::LoadFromFile(ID3D11Device *mOrigDevice1)
 		hr = DirectX::CreateWICTextureFromFileEx(mOrigDevice1,
 				filename.c_str(), 0,
 				D3D11_USAGE_DEFAULT, bind_flags, 0, misc_flags,
-				false, &resource, NULL);
+				DirectX::WIC_LOADER_FLAGS::WIC_LOADER_FORCE_SRGB, &resource, NULL);
 	}
 	if (SUCCEEDED(hr)) {
 		device = mOrigDevice1;
