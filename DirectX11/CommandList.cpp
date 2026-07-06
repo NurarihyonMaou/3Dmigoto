@@ -4523,7 +4523,7 @@ void CustomResource::LoadFromFile(ID3D11Device *mOrigDevice1)
 	// bind_flags indicate it will be used as a shader resource.
 
 	// Needs to be called at some point before CreateXXXTextureFromFile:
-	CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+	EnsureCOM();
 
 	ext = filename.substr(filename.rfind(L"."));
 	if (!_wcsicmp(ext.c_str(), L".dds")) {
