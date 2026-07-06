@@ -5612,6 +5612,11 @@ static constexpr bool is_shader_resource(wchar_t shader_type) {
 	}
 }
 
+constexpr bool token_equals(const wchar_t* str, size_t len, const wchar_t* token, size_t token_len)
+{
+	return len == token_len && wmemcmp(str, token, token_len) == 0;
+}
+
 IniParserResult ResourceCopyTarget::ParseTargetPipelineSlot(const wchar_t*& target, size_t length, bool is_source)
 {
 	//LogInfo("ParseTargetPipelineSlot: target=%ls, length=%d, is_source=%d\n", target, length, is_source);
@@ -5694,7 +5699,7 @@ IniParserResult ResourceCopyTarget::ParseTargetPipelineSlot(const wchar_t*& targ
 			}
 		}
 		// Match token against exact string.
-		else if (suffix_equals(target, length, t.keyword, t.len)) {
+		else if (token_equals(target, length, t.keyword, t.len)) {
 			type = t.type;
 
 			if (type & ResourceCopyTargetType::SWAP_CHAIN_MASK) {
