@@ -4916,6 +4916,40 @@ void CustomResourcePool::ResetResource(size_t pool_index)
 	}
 }
 
+void CustomResourcePool::ResetResources()
+{
+	for (size_t i = 0; i < resources.size(); ++i)
+	{
+		ResetResource(i);
+	}
+}
+
+void CustomResourcePool::Reset()
+{
+	// Clear slot metadata.
+	if (index_type != PoolIndexType::RING || keep_alive_frames != UINT32_MAX) {
+		for (PoolSlot& slot : index_table)
+		{
+			slot.key = FLT_MAX;
+			slot.last_seen = 0;
+		}
+	}
+
+	if (index_type != PoolIndexType::RING) {
+		// Reset replacement pointer.
+		last_replacement_index = resources.empty() ? 0 : resources.size() - 1;
+
+		// Clear lookup table.
+		index_map.clear();
+	}
+
+	// Force ExpireResources() to run next frame.
+	last_expiration_run = UINT32_MAX;
+
+	// Reset resource contents.
+	ResetResources();
+}
+
 void CustomResourcePool::ExpireResources()
 {
 	if (keep_alive_frames == UINT32_MAX)
@@ -5637,6 +5671,10 @@ IniParserResult ResourceCopyTarget::ParseTargetPool(const wchar_t*& target, size
 		evaluation_mode = ResourceCopyTargetEvaluationMode::POOL_SIZE;
 		pool_id = wstring(target);
 	}
+	else if (evaluation_mode == ResourceCopyTargetEvaluationMode::RESOURCE)
+	{
+		pool_id = wstring(target);
+	}
 
 	if (!pool_id.empty())
 	{
@@ -5876,9 +5914,6 @@ bool ParseCommandListResourceCopyDirective(const wchar_t *section,
 	if (!operation->dst.ParseTarget(key, false, ini_namespace, command_list->scope))
 		goto bail;
 
-	if (operation->dst.type == ResourceCopyTargetType::CUSTOM_RESOURCE_POOL)
-		goto bail;
-
 	// parse_enum_option_string replaces spaces with NULLs, so it can't
 	// operate on the buffer in the wstring directly. I could potentially
 	// change it to work without modifying the string, but for now it's
@@ -5924,7 +5959,8 @@ bool ParseCommandListResourceCopyDirective(const wchar_t *section,
 		// we assigned to it. Mostly this would already work due to the
 		// custom resource rules, but adding this rule should make
 		// assigning the back buffer to a render target work.
-		if (operation->dst.type == ResourceCopyTargetType::CUSTOM_RESOURCE)
+		if (operation->dst.type == ResourceCopyTargetType::CUSTOM_RESOURCE
+			|| operation->dst.type == ResourceCopyTargetType::CUSTOM_RESOURCE_POOL)
 			operation->options |= ResourceCopyOptions::COPY;
 		else if (operation->dst.type == ResourceCopyTargetType::RENDER_TARGET)
 			operation->options |= ResourceCopyOptions::REFERENCE;
@@ -6224,6 +6260,11 @@ bool CommandPlaceholder::noop(bool post, bool ignore_cto_pre, bool ignore_cto_po
 {
 	LogOverlayW(LOG_WARNING, L"Command not terminated\n - [%ls]\n", ini_line.c_str());
 	return true;
+}
+
+void ResourceCopyTarget::SetCustomResource(CustomResource* resource)
+{
+	_custom_resource = resource;
 }
 
 CustomResource* ResourceCopyTarget::GetCustomResource(bool static_evaluation)
@@ -6823,7 +6864,10 @@ void ResourceCopyTarget::SetResource(
 		// values won't have finished transferring yet. These will be
 		// set from elsewhere.
 	case ResourceCopyTargetType::CUSTOM_RESOURCE_POOL:
-		// Can't "set" resource pool object
+		// 1. Reset pool state (slots metadata and indexing state).
+		// 2. Do `PoolFoo[$index] = null` for all resources.
+		if (res == NULL && view == NULL)
+			custom_resource_pool->Reset();
 		break;
 	}
 }
@@ -8804,6 +8848,21 @@ void ResourceCopyOperation::run(CommandListState *state)
 	if (dst.type != ResourceCopyTargetType::CUSTOM_RESOURCE_POOL)
 	{
 		CopySourceToDestination(state, src_resource, src_view, stride, offset, format, buf_src_size);
+	}
+	else
+	{
+		// TODO: Implement a proper way to do the same without hacks.
+		dst.type = ResourceCopyTargetType::CUSTOM_RESOURCE;
+		CustomResourcePool* custom_resource_pool = dst.custom_resource_pool;
+		dst.custom_resource_pool = nullptr;
+		for (size_t i = 0; i < custom_resource_pool->resources.size(); ++i)
+		{
+			CustomResource* dst_resource = custom_resource_pool->GetResource((float)i, false, true);
+			dst.SetCustomResource(dst_resource);
+			CopySourceToDestination(state, src_resource, src_view, stride, offset, format, buf_src_size);
+		}
+		dst.custom_resource_pool = custom_resource_pool;
+		dst.type = ResourceCopyTargetType::CUSTOM_RESOURCE_POOL;
 	}
 
 	if (src_view)

@@ -598,6 +598,8 @@ public:
 	bool PropagateFlags(D3D11_BIND_FLAG bind_flags, D3D11_RESOURCE_MISC_FLAG misc_flags);
 	CustomResource* InitializeResource(size_t pool_index);
 	void ResetResource(size_t pool_index);
+	void ResetResources();
+	void Reset();
 	void ExpireResources();
 	void AssignSlot(size_t slot, float key);
 	CustomResource* GetResource(float id, bool static_evaluation = false, bool use_ring_index = false);
@@ -762,6 +764,7 @@ public:
 	IniParserResult ParseTargetCustomResource(const wchar_t*& target, size_t length, const wstring* ini_namespace, CommandListScope* scope);
 	IniParserResult ParseTargetPool(const wchar_t*& target, size_t length, const wstring* ini_namespace, CommandListScope* scope);
 	bool ParseTarget(const wchar_t *target, bool is_source, const wstring *ini_namespace, CommandListScope* scope);
+	void SetCustomResource(CustomResource* resource);
 	CustomResource* GetCustomResource(bool static_evaluation = false);
 	ID3D11Resource *GetResource(CommandListState *state,
 			ID3D11View **view,
