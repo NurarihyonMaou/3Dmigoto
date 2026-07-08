@@ -340,7 +340,7 @@ struct ResourceHandleInfo
 		D3D11_TEXTURE3D_DESC desc3D;
 	};
 
-	void InitializeDataCache(size_t size);
+	void InitializeDataCache(size_t size, size_t offset = 0);
 	void SetDataCache(void* src, size_t size);
 	void SetDataCacheRegion(const void* src, size_t size, UINT offset);
 	// Clears cached region hashes and invalidates cached buffer data.

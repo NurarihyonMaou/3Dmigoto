@@ -1921,11 +1921,11 @@ void RegionHashesCache::Clear()
 
 // Initializes CPU-side snapshot buffer.
 // This buffer allows hashing without repeated GPU Map() calls.
-void ResourceHandleInfo::InitializeDataCache(size_t size)
+void ResourceHandleInfo::InitializeDataCache(size_t size, size_t offset)
 {
 	//LogInfo("InitializeDataCache size=%d\n", size);
 	cached_data.reset();
-	cached_data_offset = 0;
+	cached_data_offset = offset;
 	cached_data_size = size;
 
 	// Initialize region hashes cache.

@@ -4361,16 +4361,11 @@ void CustomResource::SetHandleInfo(ID3D11Resource* source, size_t offset, size_t
 	if (!handle_info)
 		handle_info = std::make_unique<ResourceHandleInfo>();
 
-	// Drop any previously owned/shared buffer before binding new view.
-	// This line is not needed, but lets keep the intent clear.
-	handle_info->cached_data.reset();
+	// Initialize cache and store view metadata (offset and size) relative to the shared cache.
+	handle_info->InitializeDataCache(data_size ? data_size : src_handle_info->cached_data_size, src_handle_info->cached_data_offset + offset);
 
 	// Share ownership of the cached buffer to ensure it remains alive independently of the source.
 	handle_info->cached_data = src_handle_info->cached_data;
-
-	// Store view metadata (offset and size) relative to the shared cache.
-	handle_info->cached_data_offset = src_handle_info->cached_data_offset + offset;
-	handle_info->cached_data_size = data_size ? data_size : src_handle_info->cached_data_size;
 
 	LeaveCriticalSection(&G->mCriticalSection);
 }
