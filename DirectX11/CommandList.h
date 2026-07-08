@@ -840,6 +840,8 @@ public:
 	ResourceCopyOperation();
 	~ResourceCopyOperation();
 
+	void CopySourceToDestination(CommandListState* state, ID3D11Resource* src_resource, ID3D11View* src_view, UINT stride, UINT offset, DXGI_FORMAT format, UINT buf_src_size);
+
 	void run(CommandListState*) override;
 };
 

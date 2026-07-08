@@ -8544,33 +8544,10 @@ static ResourceCopyTargetType EquivTarget(ResourceCopyTargetType type)
 	return type;
 }
 
-void ResourceCopyOperation::run(CommandListState *state)
+void ResourceCopyOperation::CopySourceToDestination(
+	CommandListState* state, ID3D11Resource* src_resource, ID3D11View* src_view, UINT stride, UINT offset, DXGI_FORMAT format, UINT buf_src_size
+)
 {
-	HackerDevice *mHackerDevice = state->mHackerDevice;
-	HackerContext *mHackerContext = state->mHackerContext;
-	ID3D11DeviceContext *mOrigContext1 = state->mOrigContext1;
-	ID3D11Resource *src_resource = NULL;
-	ID3D11Resource *dst_resource = NULL;
-	ID3D11Resource **pp_cached_resource = &cached_resource;
-	ID3D11Device **pp_cached_device = NULL;
-	ResourcePool *p_resource_pool = &resource_pool;
-	ID3D11View *src_view = NULL;
-	ID3D11View *dst_view = NULL;
-	ID3D11View **pp_cached_view = &cached_view;
-	UINT stride = 0;
-	UINT offset = 0;
-	DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
-	UINT buf_src_size = 0, buf_dst_size = 0;
-
-	COMMAND_LIST_LOG(state, "%S\n", ini_line.c_str());
-
-	if (src.type == ResourceCopyTargetType::EMPTY) {
-		dst.SetResource(state, NULL, NULL, 0, 0, DXGI_FORMAT_UNKNOWN, 0);
-		return;
-	}
-
-	src_resource = src.GetResource(state, &src_view, &stride, &offset, &format, &buf_src_size,
-			((options & ResourceCopyOptions::REFERENCE) ? &dst : NULL));
 	if (!src_resource) {
 		COMMAND_LIST_LOG(state, "  Copy source was NULL\n");
 		if (!(options & ResourceCopyOptions::UNLESS_NULL)) {
@@ -8585,6 +8562,12 @@ void ResourceCopyOperation::run(CommandListState *state)
 	}
 
 	CustomResource* dst_custom_resource = nullptr;
+
+	ID3D11Resource** pp_cached_resource = &cached_resource;
+	ID3D11Device** pp_cached_device = NULL;
+	ResourcePool* p_resource_pool = &resource_pool;
+	ID3D11View** pp_cached_view = &cached_view;
+
 	if (dst.type == ResourceCopyTargetType::CUSTOM_RESOURCE) {
 		// If we're copying to a custom resource, use the resource &
 		// view in the CustomResource directly as the cache instead of
@@ -8621,6 +8604,10 @@ void ResourceCopyOperation::run(CommandListState *state)
 
 	FillInMissingInfo(src.type, src_resource, src_view, &stride, &offset, &buf_src_size, &format);
 
+	ID3D11Resource* dst_resource = NULL;
+	ID3D11View* dst_view = NULL;
+	UINT buf_dst_size = 0;
+
 	if (options & ResourceCopyOptions::COPY_MASK) {
 		RecreateCompatibleResource(&ini_line, &src, &dst, src_resource, pp_cached_resource, p_resource_pool, src_view, pp_cached_view,
 			state, options, stride, offset, format, &buf_src_size, &buf_dst_size);
@@ -8654,7 +8641,7 @@ void ResourceCopyOperation::run(CommandListState *state)
 			Profiling::resource_full_copies++;
 			if (G->track_region_hashes && dst_custom_resource)
 				dst_custom_resource->SetHandleInfo(src_resource, 0, buf_dst_size);
-			mOrigContext1->CopyResource(dst_resource, src_resource);
+			state->mOrigContext1->CopyResource(dst_resource, src_resource);
 		}
 	} else {
 		COMMAND_LIST_LOG(state, "  copying by reference\n");
@@ -8703,11 +8690,34 @@ void ResourceCopyOperation::run(CommandListState *state)
 
 out_release:
 
-	if ((options & ResourceCopyOptions::NO_VIEW_CACHE || src.forbid_view_cache)
-			&& *pp_cached_view)
+	if ((options & ResourceCopyOptions::NO_VIEW_CACHE || src.forbid_view_cache) && *pp_cached_view)
 	{
 		(*pp_cached_view)->Release();
 		*pp_cached_view = NULL;
+	}
+}
+
+void ResourceCopyOperation::run(CommandListState *state)
+{
+	COMMAND_LIST_LOG(state, "%S\n", ini_line.c_str());
+
+	if (src.type == ResourceCopyTargetType::EMPTY) {
+		dst.SetResource(state, NULL, NULL, 0, 0, DXGI_FORMAT_UNKNOWN, 0);
+		return;
+	}
+
+	ID3D11Resource* src_resource = NULL;
+	ID3D11View* src_view = NULL;
+	UINT stride = 0;
+	UINT offset = 0;
+	DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+	UINT buf_src_size = 0;
+
+	src_resource = src.GetResource(state, &src_view, &stride, &offset, &format, &buf_src_size, ((options & ResourceCopyOptions::REFERENCE) ? &dst : NULL));
+
+	if (dst.type != ResourceCopyTargetType::CUSTOM_RESOURCE_POOL)
+	{
+		CopySourceToDestination(state, src_resource, src_view, stride, offset, format, buf_src_size);
 	}
 
 	if (src_view)
