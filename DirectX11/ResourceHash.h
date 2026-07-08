@@ -511,6 +511,12 @@ UINT GetVertexBufferRegionOffset(UINT stride, DrawCallInfo* call_info, UINT byte
 UINT GetIndexBufferRegionOffset(DXGI_FORMAT format, DrawCallInfo* call_info, UINT byte_offset);
 UINT GetIndexBufferRegionSize(DXGI_FORMAT format, DrawCallInfo* call_info);
 UINT GetVertexBufferRegionSize(UINT stride, DrawCallInfo* call_info);
+
+float BitCastToFloat(uint32_t bits);
+uint64_t HashPointer(const void* p);
+uint32_t HashUnsigned32(uint32_t u);
+float EncodeFloat30(const uint32_t hash);
+
 uint32_t GetRegionHash(ID3D11DeviceContext* context, ID3D11Buffer* buffer, UINT offset, UINT size, CustomResource* custom_resource = nullptr);
 
 void MarkResourceHashContaminated(ID3D11Resource *dest, UINT DstSubresource,
