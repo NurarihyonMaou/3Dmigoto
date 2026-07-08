@@ -1924,30 +1924,25 @@ static CustomResourcePool* ParseResourcePoolSection(const wchar_t* section_name)
 	wstring pool_id = section_name;
 	std::transform(pool_id.begin(), pool_id.end(), pool_id.begin(), ::towlower);
 
-	CustomResourcePool* custom_resource_pool = &customResourcePools[pool_id];
+	CustomResourcePool* pool = &customResourcePools[pool_id];
 	
-	custom_resource_pool->name = pool_id;
-	custom_resource_pool->resource_template = ParseResourceSection(section_name, L"template");
+	pool->name = pool_id;
 
-	custom_resource_pool->resource_template->pool = custom_resource_pool;
-	custom_resource_pool->resource_template->pool_index = -1;
+	pool->index_type = GetIniEnumClass(section_name, L"pool_index_type", PoolIndexType::RING, NULL, PoolIndexTypeNames);
+	pool->lazy_initialization = GetIniBool(section_name, L"pool_lazy_init", 1, NULL);
+	int keep_alive_frames = GetIniInt(section_name, L"pool_keep_alive_frames", -1, NULL);
+	if (keep_alive_frames >= 0)
+		pool->keep_alive_frames = (unsigned)keep_alive_frames;
+	pool->null_expired_resources = GetIniBool(section_name, L"pool_null_expired_resources", 1, NULL);
 
-	custom_resource_pool->resources.resize(pool_size, nullptr);
-	custom_resource_pool->lazy_initialization = GetIniBool(section_name, L"pool_lazy_init", 1, NULL);
-	custom_resource_pool->index_type = GetIniEnumClass(section_name, L"pool_index_type", PoolIndexType::RING, NULL, PoolIndexTypeNames);
+	pool->resource_template = ParseResourceSection(section_name, L"template");
 
-	if (custom_resource_pool->index_type == PoolIndexType::FIFO) {
-		custom_resource_pool->fifo_index_table.resize(pool_size, FLT_MAX);
-		custom_resource_pool->last_fifo_index = pool_size - 1;
-	}
+	pool->resource_template->pool = pool;
+	pool->resource_template->pool_index = -1;
 
-	if (!custom_resource_pool->lazy_initialization) {
-		for (int pool_index = 0; pool_index < pool_size; ++pool_index) {
-			custom_resource_pool->InitializeResource(pool_index);
-		}
-	}
+	pool->Initialize(pool_size);
 
-	return custom_resource_pool;
+	return pool;
 }
 
 static void ParseResourceSections()

@@ -4841,7 +4841,7 @@ bool CustomResourcePool::PropagateFlags(D3D11_BIND_FLAG bind_flags, D3D11_RESOUR
 	return ret;
 }
 
-CustomResource* CustomResourcePool::InitializeResource(int pool_index)
+CustomResource* CustomResourcePool::InitializeResource(size_t pool_index)
 {
 	wstring resource_id = wstring(name) + L"_" + std::to_wstring(pool_index);
 
@@ -4887,7 +4887,85 @@ CustomResource* CustomResourcePool::InitializeResource(int pool_index)
 	return custom_resource;
 }
 
-CustomResource* CustomResourcePool::GetResource(float id, bool static_evaluation) {
+void CustomResourcePool::Initialize(size_t pool_size)
+{
+	resources.resize(pool_size, nullptr);
+
+	if (index_type != PoolIndexType::RING || keep_alive_frames != UINT32_MAX)
+		index_table.resize(pool_size);
+
+	if (index_type != PoolIndexType::RING)
+		last_replacement_index = pool_size - 1;
+
+	if (!lazy_initialization)
+	{
+		for (size_t i = 0; i < pool_size; ++i)
+			InitializeResource(i);
+	}
+}
+
+void CustomResourcePool::ResetResource(size_t pool_index)
+{
+	CustomResource* custom_resource = resources[pool_index];
+	if (custom_resource != nullptr) {
+		custom_resource->stride = 0;
+		custom_resource->offset = 0;
+		custom_resource->format = DXGI_FORMAT_UNKNOWN;
+		custom_resource->buf_size = 0;
+		custom_resource->is_null = true;
+	}
+}
+
+void CustomResourcePool::ExpireResources()
+{
+	if (keep_alive_frames == UINT32_MAX)
+		return;
+
+	if (last_expiration_run == G->frame_no)
+		return;
+
+	last_expiration_run = G->frame_no;
+
+	for (size_t i = 0; i < index_table.size(); ++i)
+	{
+		PoolSlot& pool_slot = index_table[i];
+
+		if (pool_slot.key == FLT_MAX)
+			continue;
+
+		if (G->frame_no - pool_slot.last_seen > keep_alive_frames)
+		{
+			if (index_type != PoolIndexType::RING)
+				index_map.erase(pool_slot.key);
+
+			if (null_expired_resources)
+				ResetResource(i);
+
+			pool_slot.key = FLT_MAX;
+			pool_slot.last_seen = 0;
+		}
+	}
+}
+
+void CustomResourcePool::AssignSlot(size_t slot, float key)
+{
+	PoolSlot& pool_slot = index_table[slot];
+
+	if (index_type != PoolIndexType::RING) {
+		// Remove previous mapping if slot occupied
+		if (pool_slot.key != FLT_MAX)
+			index_map.erase(pool_slot.key);
+
+		// Update lookup table for keyed indexing modes
+		index_map[key] = slot;
+	}
+
+	pool_slot.key = key;
+	if (keep_alive_frames != UINT32_MAX)
+		pool_slot.last_seen = G->frame_no;
+}
+
+CustomResource* CustomResourcePool::GetResource(float id, bool static_evaluation, bool use_ring_index) {
 	// During static evaluation (parsing time) we cannot evaluate dynamic indexes
 	// So parsing-time config has to be applied to the entire pool
 	if (static_evaluation)
@@ -4896,9 +4974,14 @@ CustomResource* CustomResourcePool::GetResource(float id, bool static_evaluation
 	if (resources.empty())
 		return nullptr;
 
+	ExpireResources();
+
 	size_t pool_index;
 
-	switch (index_type) {
+	// Treat pool index as RING to directly get underlying custom resource.
+	PoolIndexType pool_index_type = use_ring_index ? PoolIndexType::RING : index_type;
+
+	switch (pool_index_type) {
 	case PoolIndexType::RING:
 	{
 		// Allows to continuously loop through a pool
@@ -4906,6 +4989,10 @@ CustomResource* CustomResourcePool::GetResource(float id, bool static_evaluation
 		//   ResourcePoolFoo[-1] returns ResourceC pool_index (2)
 		//   ResourcePoolFoo[3] returns ResourceA pool_index (0)
 		pool_index = ((int)id % resources.size() + resources.size()) % resources.size();
+
+		if (keep_alive_frames != UINT32_MAX)
+			AssignSlot(pool_index, (float)pool_index);
+
 		break;
 	}
 	case PoolIndexType::FIFO:
@@ -4921,19 +5008,23 @@ CustomResource* CustomResourcePool::GetResource(float id, bool static_evaluation
 		//	 ResourcePoolFoo[33] -> ResourcePoolFoo_0 (pool_index 0, evicts UID 11)
 		//   ResourcePoolFoo[22] -> ResourcePoolFoo_1 (pool_index 1, existing assignment)
 		//   ResourcePoolFoo[44] -> ResourcePoolFoo_1 (pool_index 1, evicts UID 22)
-		auto it = fifo_index_map.find(id);
+		auto it = index_map.find(id);
 
-		if (it != fifo_index_map.end())
+		if (it != index_map.end())
 		{
 			// Return existing UID -> slot mapping
 			pool_index = it->second;
+
+			if (keep_alive_frames != UINT32_MAX)
+				index_table[pool_index].last_seen = G->frame_no;
 		}
 		else
 		{
 			// Allocate next FIFO slot
-			pool_index = (last_fifo_index + 1) % resources.size();
+			pool_index = (last_replacement_index + 1) % resources.size();
+			last_replacement_index = pool_index;
 
-			float previous_uid = fifo_index_table[pool_index];
+			AssignSlot(pool_index, id);
 
 			// Remove previous UID mapping if slot occupied
 			if (previous_uid != FLT_MAX)

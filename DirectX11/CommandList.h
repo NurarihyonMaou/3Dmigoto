@@ -567,6 +567,12 @@ static EnumName_t<const wchar_t*, PoolIndexType> PoolIndexTypeNames[] = {
 	{NULL, PoolIndexType::INVALID} // End of list marker
 };
 
+struct PoolSlot
+{
+	float key = FLT_MAX;
+	unsigned last_seen = 0;
+};
+
 typedef std::unordered_map<float, size_t> CustomResourcePoolIndexMap;
 
 class CustomResourcePool
@@ -579,13 +585,22 @@ public:
 	bool lazy_initialization = true;
 	PoolIndexType index_type = PoolIndexType::RING;
 
-	CustomResourcePoolIndexMap fifo_index_map;  // O(1) lookup of uid -> pool_index
-	std::vector<float> fifo_index_table;        // O(1) lookup of pool_index -> uid currently occupying slot
-	size_t last_fifo_index = 0;                 // Ring pointer for FIFO eviction
+	CustomResourcePoolIndexMap index_map; // O(1) lookup of uid -> pool_index
+	std::vector<PoolSlot> index_table;    // O(1) lookup of pool_index -> uid currently occupying slot
 
+	size_t last_replacement_index = 0; // Ring pointer for FIFO eviction
+
+	unsigned keep_alive_frames = UINT32_MAX;
+	bool null_expired_resources = false;
+	unsigned last_expiration_run = UINT32_MAX;
+
+	void Initialize(size_t pool_size);
 	bool PropagateFlags(D3D11_BIND_FLAG bind_flags, D3D11_RESOURCE_MISC_FLAG misc_flags);
-	CustomResource* InitializeResource(int pool_index);
-	CustomResource* GetResource(float id, bool static_evaluation = false);
+	CustomResource* InitializeResource(size_t pool_index);
+	void ResetResource(size_t pool_index);
+	void ExpireResources();
+	void AssignSlot(size_t slot, float key);
+	CustomResource* GetResource(float id, bool static_evaluation = false, bool use_ring_index = false);
 };
 
 typedef std::unordered_map<std::wstring, CustomResourcePool> CustomResourcePools;
