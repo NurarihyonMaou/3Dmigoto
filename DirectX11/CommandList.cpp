@@ -5059,16 +5059,6 @@ CustomResource* CustomResourcePool::GetResource(float id, bool static_evaluation
 			last_replacement_index = pool_index;
 
 			AssignSlot(pool_index, id);
-
-			// Remove previous UID mapping if slot occupied
-			if (previous_uid != FLT_MAX)
-				fifo_index_map.erase(previous_uid);
-
-			// Install new mapping
-			fifo_index_table[pool_index] = id;
-			fifo_index_map[id] = pool_index;
-
-			last_fifo_index = pool_index;
 		}
 		break;
 	}
