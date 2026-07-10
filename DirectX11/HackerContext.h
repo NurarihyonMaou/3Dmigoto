@@ -7,8 +7,8 @@
 
 #include "CommandList.h"
 
+#include "HackerInputLayout.h"
 #include "HackerDevice.h"
-//#include "ResourceHash.h"
 #include "Globals.h"
 
 // {A3046B1E-336B-4D90-9FD6-234BC09B8687}
@@ -134,6 +134,7 @@ private:
 	ID3D11Resource *mCurrentDepthTarget;
 	UINT mCurrentPSUAVStartSlot;
 	UINT mCurrentPSNumUAVs;
+	HackerInputLayout* mCurrentInputLayout;
 
 	// Used for deny_cpu_read, track_texture_updates and constant buffer matching
 	typedef std::unordered_map<ID3D11Resource*, MappedResourceInfo> MappedResources;

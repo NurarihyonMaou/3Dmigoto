@@ -89,6 +89,7 @@ HackerContext::HackerContext(ID3D11Device1 *pDevice1, ID3D11DeviceContext1 *pCon
 	mCurrentDepthTarget = NULL;
 	mCurrentPSUAVStartSlot = 0;
 	mCurrentPSNumUAVs = 0;
+	mCurrentInputLayout = nullptr;
 }
 
 
@@ -1467,7 +1468,15 @@ STDMETHODIMP_(void) HackerContext::IASetInputLayout(THIS_
 	/* [annotation] */
 	__in_opt ID3D11InputLayout *pInputLayout)
 {
-	 mOrigContext1->IASetInputLayout(pInputLayout);
+	if (mCurrentInputLayout)
+		mCurrentInputLayout->Release();
+
+	mCurrentInputLayout = pInputLayout ? static_cast<HackerInputLayout*>(pInputLayout) : nullptr;
+
+	if (mCurrentInputLayout)
+		mCurrentInputLayout->AddRef();
+
+	mOrigContext1->IASetInputLayout(mCurrentInputLayout ? mCurrentInputLayout->GetOrigInputLayout() : nullptr);
 }
 
 STDMETHODIMP_(void) HackerContext::IASetVertexBuffers(THIS_
@@ -2433,7 +2442,13 @@ STDMETHODIMP_(void) HackerContext::IAGetInputLayout(THIS_
 	/* [annotation] */
 	__out  ID3D11InputLayout **ppInputLayout)
 {
-	 mOrigContext1->IAGetInputLayout(ppInputLayout);
+	if (!ppInputLayout)
+		return;
+
+	*ppInputLayout = mCurrentInputLayout;
+
+	if (mCurrentInputLayout)
+		mCurrentInputLayout->AddRef();
 }
 
 STDMETHODIMP_(void) HackerContext::IAGetVertexBuffers(THIS_
