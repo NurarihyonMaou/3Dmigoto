@@ -4561,6 +4561,9 @@ void LoadConfigFile()
 		G->gFallbackScreenHeight = 1080;
 	}
 
+	// Controls whether saved values of persistent variables should be cleared when source mods are no longer detected (disabled or removed).
+	G->auto_clear_persist_vars = GetIniBool(L"System", L"auto_clear_persist_vars", true, NULL);
+
 	// [Device] (DXGI parameters)
 	LogInfo("[Device]\n");
 	G->SCREEN_WIDTH = GetIniInt(L"Device", L"width", -1, NULL);
@@ -4879,7 +4882,7 @@ void SavePersistentSettings()
 
 	G->gSettingsSaveTime = G->gTime;
 
-	if (!G->user_config_dirty || !G->gConfigInitialized) {
+	if (!G->user_config_dirty) {
 
 		// Save Existing Variables
 		for (auto global : persistent_variables)
@@ -4921,6 +4924,7 @@ void SavePersistentSettings()
 		fprintf_s(f, "%ls = %.9g\n", entry.first.c_str(), entry.second);
 
 	if (G->gReloadConfigPending && G->auto_clear_persist_vars) {
+
 		if (G->clear_saved_persist_vars) {
 			saved_variables.clear();
 			G->clear_saved_persist_vars = false;
