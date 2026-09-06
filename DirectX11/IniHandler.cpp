@@ -284,10 +284,17 @@ bool get_namespaced_section_name_lower(const wstring *section, const wstring *in
 	return rc;
 }
 
-wstring get_namespaced_var_name_lower(const wstring var, const wstring *ini_namespace)
+wstring get_namespaced_var_name_lower(const wstring& var_name, const wstring* ini_namespace)
 {
-	wstring ret = wstring(L"$\\") + *ini_namespace + wstring(L"\\") + var.substr(1);
-	std::transform(ret.begin(), ret.end(), ret.begin(), ::towlower);
+	wstring ret = L"$\\";
+	ret += *ini_namespace;
+	ret += L'\\';
+
+	if (var_name.size() > 1)
+		ret.append(var_name, 1, wstring::npos);
+
+	std::transform(ret.begin() + 2, ret.begin() + 2 + ini_namespace->size(), ret.begin() + 2, ::towlower);
+
 	return ret;
 }
 
