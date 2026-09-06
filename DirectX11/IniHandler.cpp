@@ -286,7 +286,10 @@ bool get_namespaced_section_name_lower(const wstring *section, const wstring *in
 
 wstring get_namespaced_var_name_lower(const wstring& var_name, const wstring* ini_namespace)
 {
-	wstring ret = L"$\\";
+	wstring ret;
+	ret.reserve(2 + ini_namespace->size() + 1 + (var_name.size() > 0 ? var_name.size() - 1 : 0));
+
+	ret = L"$\\";
 	ret += *ini_namespace;
 	ret += L'\\';
 
