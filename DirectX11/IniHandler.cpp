@@ -571,8 +571,8 @@ static void ParseIniKeyValLine(wstring *wline, wstring *section,
 static void ParseIniBuffer(const wchar_t *buffer, size_t length, const wstring *_ini_namespace)
 {
 	wstring wline, section, ini_path;
-	IniSectionVector *section_vector = NULL;
 	size_t line_start = 0;
+	IniSection* section_entry = NULL;
 	int warn_duplicates = 1;
 	bool warn_lines_without_equals = true;
 	wstring ini_namespace;
@@ -631,7 +631,7 @@ static void ParseIniBuffer(const wchar_t *buffer, size_t length, const wstring *
 			preamble = false;
 			ParseIniSectionLine(&wline, &section, &warn_duplicates,
 					    &warn_lines_without_equals,
-					    &section_vector, &ini_namespace,
+					    &section_entry, &ini_namespace,
 					    &ini_path);
 			continue;
 		}
@@ -643,7 +643,7 @@ static void ParseIniBuffer(const wchar_t *buffer, size_t length, const wstring *
 		}
 
 		ParseIniKeyValLine(&wline, &section, warn_duplicates,
-				   warn_lines_without_equals, section_vector,
+				   warn_lines_without_equals, section_entry,
 				   &ini_namespace);
 	}
 }
